@@ -611,6 +611,13 @@ function clean(text: string): string {
   r = r.replace(/\b(user message|bot response|subscriber|webhook|endpoint|API|JSON|function|pattern|debounce)\b/gi, '');
   // ANTI-TEMPLATE: supprimer toute variable ManyChat/template {{...}} qui leak
   r = r.replace(/\{\{[^}]*\}\}/g, '').replace(/\{%[^%]*%\}/g, '');
+  // ANTI-EMOJI SPAM: garder max 1 émoji par message
+  const emojiRegex = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu;
+  const emojis = r.match(emojiRegex) || [];
+  if (emojis.length > 1) {
+    let kept = 0;
+    r = r.replace(emojiRegex, (m) => kept++ === 0 ? m : '');
+  }
   // Nettoyage espaces multiples après strips
   r = r.replace(/\s{2,}/g, ' ').trim();
   // TRONCATURE INTELLIGENTE: protéger les URLs
@@ -787,7 +794,7 @@ INTERDIT: affirmer des choses sur sa vie qu'il a pas dites, diagnostiquer/psycha
 🚫 ANTI-SELF-TALK ABSOLU: Ta réponse EST le message DM envoyé au prospect. JAMAIS de raisonnement interne ("Il demande...", "Je dois...", "Le prospect veut..."). JAMAIS parler de toi ou du prospect à la 3ème personne. JAMAIS analyser la situation avant de répondre. Tu PARLES au prospect, point. Chaque mot que tu écris sera LU par le prospect tel quel.
 🇫🇷 FRANÇAIS ORAL UNIQUEMENT. Pas UN seul mot d'anglais. Tout en français, registre oral, comme un pote qui parle en DM. Si un terme n'a pas d'équivalent français courant → reformule en mots simples.
 
-1-2 phrases MAX. 1 BLOC. MAX ${maxChars} chars. 0-1 emoji. "Adam" INTERDIT. ${salamRule} JAMAIS de prix.
+1-2 phrases MAX. 1 BLOC. MAX ${maxChars} chars. ÉMOJIS: MAXIMUM 1 émoji tous les 3-4 messages. La MAJORITÉ de tes messages doivent avoir ZÉRO émoji. Tu parles comme un vrai mec en DM, pas un community manager. "Adam" INTERDIT. ${salamRule} JAMAIS de prix.
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_VALEUR}. ⛔ INTERDIT: landing page et Calendly (PAS ENCORE).` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_LANDING}. ⛔ INTERDIT: Calendly (LANDING D'ABORD).` : `LIEN AUTORISÉ: ${CALENDLY_LINK}. Les autres liens ont déjà été envoyés.`}
 
 ${pending.hasPending ? `\n⏸️ PATIENCE: Ta dernière question "${pending.question.substring(0, 80)}" est ENCORE EN ATTENTE (${pending.turnsWaiting} msg depuis). ${pending.turnsWaiting >= 2 ? 'ABANDONNE cette question, passe à autre chose.' : 'NE LA REPOSE PAS. Réponds à ce qu\'il dit MAINTENANT. Laisse-lui le temps. Il reviendra dessus quand il sera prêt. Si tu reposes la même question → il va se sentir harcelé.'}` : ''}
