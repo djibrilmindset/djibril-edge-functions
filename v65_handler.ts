@@ -322,17 +322,38 @@ function getQualification(mem: ProspectMemory): QualStatus {
 function extractKeywords(text: string): Set<string> {
   return new Set(text.toLowerCase().match(/\b[a-zàâäéèêëîïôûùüœç]{3,}\b/g) || []);
 }
+function extractBigrams(text: string): Set<string> {
+  const words = (text.toLowerCase().match(/\b[a-zàâäéèêëîïôûùüœç]{2,}\b/g) || []);
+  const bigrams = new Set<string>();
+  for (let i = 0; i < words.length - 1; i++) bigrams.add(words[i] + '_' + words[i + 1]);
+  return bigrams;
+}
+function getStartSignature(text: string): string {
+  return (text.toLowerCase().match(/\b[a-zàâäéèêëîïôûùüœç]{2,}\b/g) || []).slice(0, 4).join(' ');
+}
 function calculateSimilarity(text1: string, text2: string): number {
   if (!text1 || !text2) return 0;
+  // Score mots-clés (Jaccard)
   const kw1 = extractKeywords(text1); const kw2 = extractKeywords(text2);
   if (kw1.size === 0 || kw2.size === 0) return 0;
-  let overlap = 0;
-  for (const kw of kw1) if (kw2.has(kw)) overlap++;
-  const union = new Set([...kw1, ...kw2]).size;
-  return union > 0 ? overlap / union : 0;
+  let kwOverlap = 0;
+  for (const kw of kw1) if (kw2.has(kw)) kwOverlap++;
+  const kwUnion = new Set([...kw1, ...kw2]).size;
+  const kwScore = kwUnion > 0 ? kwOverlap / kwUnion : 0;
+  // Score bigrammes (capture la structure)
+  const bg1 = extractBigrams(text1); const bg2 = extractBigrams(text2);
+  let bgOverlap = 0;
+  for (const bg of bg1) if (bg2.has(bg)) bgOverlap++;
+  const bgUnion = new Set([...bg1, ...bg2]).size;
+  const bgScore = bgUnion > 0 ? bgOverlap / bgUnion : 0;
+  // Score début de phrase (même ouverture = même sensation)
+  const start1 = getStartSignature(text1);
+  const start2 = getStartSignature(text2);
+  const startPenalty = (start1.length > 5 && start1 === start2) ? 0.15 : 0;
+  return Math.max(kwScore, bgScore) + startPenalty;
 }
 function isTooSimilar(response: string, recentBotResponses: string[]): boolean {
-  for (const recent of recentBotResponses) { if (calculateSimilarity(response, recent) > 0.25) return true; }
+  for (const recent of recentBotResponses) { if (calculateSimilarity(response, recent) > 0.18) return true; }
   return false;
 }
 function hasSalamBeenSaid(history: any[]): boolean {
@@ -666,7 +687,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   const salamDone = hasSalamBeenSaid(history);
   const salamRule = salamDone ? 'JAMAIS Salam (DÉJÀ DIT).' : (n === 0 ? 'Salam OK (1er msg).' : 'JAMAIS Salam.');
   const recentUser = history.slice(-5).filter(h => h.user_message).map((h, i) => `[${i+1}] ${(h.user_message || '').substring(0, 80)}`);
-  const recentBot = history.slice(-6).filter(h => h.bot_response).map(h => h.bot_response);
+  const recentBot = history.slice(-10).filter(h => h.bot_response).map(h => h.bot_response);
   const userSummary = recentUser.length ? '\nDERNIERS MSGS: ' + recentUser.join(' | ') : '';
   const botBans = recentBot.length ? '\n⛔ DÉJÀ DIT (INTERDIT de redire — ni les mots, ni l\'idée, ni la structure): ' + recentBot.map((r, i) => `[${i+1}] "${(r || '').substring(0, 100)}"`).join(' | ') : '';
   // DÉTECTION POST-DEFLECT: si le dernier msg bot était un deflect média, le prospect vient de réécrire en texte
@@ -795,7 +816,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
 #4: NOMME AVEC HUMILITÉ — Affect labeling (Voss) mais TOUJOURS sous forme de question ou d'hypothèse. "On dirait que..?" / "J'ai l'impression que... je me trompe ?". JAMAIS de diagnostic. T'es un grand frère, pas un psy.
 #5: ZÉRO NEEDINESS — Tu proposes, tu forces JAMAIS (Camp). Détachement = autorité.
 #6: FAIS-LE PARLER (Pellabère) — Questions INTRINSÈQUES: pas "pourquoi ?" mais "qu'est-ce qui fait que... ?" / "si tu obtiens ça, ça change quoi ?". Lui parle plus que toi. Tu GUIDES vers la réponse, tu la donnes JAMAIS. Il doit se convaincre LUI-MÊME.
-#7: JAMAIS RÉPÉTER — Chaque msg = angle, mot, structure et IDÉE complètement NOUVEAUX. Relis les ⛔ DÉJÀ DIT et change TOUT: les mots, la structure, l'angle, le sujet. Si t'as déjà parlé de blocage → parle d'autre chose. Si t'as posé une question → cette fois valide/reformule.
+#7: JAMAIS RÉPÉTER — C'est la règle la plus CRITIQUE. Chaque msg = angle, mot, structure et IDÉE complètement NOUVEAUX. Relis les ⛔ DÉJÀ DIT un par un et change TOUT: les mots, la structure, l'angle, le sujet, le DÉBUT DE PHRASE. Si t'as déjà commencé un msg par "Je capte" → commence AUTREMENT. Si t'as déjà parlé de blocage → parle d'autre chose. Si t'as posé une question → cette fois valide/reformule. Si t'as dit "intéressant" → dis JAMAIS intéressant. ZÉRO mot ou expression qui revient. Le prospect VOIT la répétition, il sent le robot. VARIE TOUT.
 #8: JAMAIS REDEMANDER — Si tu sais déjà une info (voir 🧠 TU SAIS DÉJÀ), UTILISE-LA.
 #9: QUALIFICATION NATURELLE — Le métier et la situation tu peux les demander VITE (dès échange 2-3) parce que c'est naturel dans une conv. L'âge tu le glisses naturellement. Le budget = JAMAIS en direct, toujours via des indices ("t'as déjà investi dans un truc pour avancer ?"). Qualifie PENDANT que tu connectes, pas après.
 #13: TEASING RÉCOMPENSE — Dès l'échange 2-3, AMORCE que t'as quelque chose de concret à lui offrir. Le prospect reste dans la conv UNIQUEMENT s'il sent qu'il va gagner quelque chose. Plante la graine: "j'ai un truc qui pourrait t'aider sur ça" / "y'a un mécanisme que j'explique et qui change tout" / "si tu veux je t'envoie un truc là-dessus". Ça crée l'ANTICIPATION (dopamine). Il reste pour la récompense. MAIS: tu balances PAS le lien tout de suite, tu le fais ATTENDRE 1-2 échanges de plus pour qu'il le VEUILLE vraiment.
@@ -908,9 +929,9 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   let sys = buildPrompt(history, phaseResult, memoryBlock, profile);
   // Si spirale détectée, injecter un RESET dans le prompt
   const recentResponses = history.slice(-10).map((h: any) => h.bot_response || '').filter(Boolean);
-  const isStuck = recentResponses.length >= 3 && recentResponses.slice(-3).every((r, _, arr) => calculateSimilarity(r, arr[0]) > 0.5);
+  const isStuck = recentResponses.length >= 3 && recentResponses.slice(-3).some((r, i, arr) => i > 0 && calculateSimilarity(r, arr[0]) > 0.3);
   if (isStuck) {
-    sys += '\n\n🚨 ALERTE SPIRALE: Tes 3 dernières réponses étaient QUASI-IDENTIQUES. Le prospect reçoit le même message en boucle. Tu DOIS répondre quelque chose de COMPLÈTEMENT DIFFÉRENT. Change de sujet. Pose une question sur un AUTRE aspect. Ou simplement dis "Je vois que je tourne en rond, parlons d\'autre chose." CASSE LA BOUCLE.';
+    sys += '\n\n🚨 ALERTE SPIRALE CRITIQUE: Tes dernières réponses se RÉPÈTENT. Le prospect voit que c\'est un robot. Tu DOIS: 1) Utiliser des MOTS COMPLÈTEMENT DIFFÉRENTS 2) Commencer ta phrase AUTREMENT (pas le même premier mot) 3) Changer de SUJET ou d\'ANGLE — si t\'as posé des questions, cette fois DONNE une info concrète. Si t\'as parlé de blocage, parle d\'ACTION. Si t\'as validé, cette fois CHALLENGE. RIEN ne doit ressembler aux messages précédents. CASSE LA BOUCLE MAINTENANT.';
   }
   // AUTO-DÉTECTION HALLUCINATION: scanner les réponses récentes pour trouver des infos inventées
   const hallCheck = detectHallucination(history, mem);
@@ -922,8 +943,8 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   const tokens = isDistress ? 100 : MAX_TOKENS;
   console.log(`[V65] Phase=${phaseResult.phase} Trust=${phaseResult.trust} Funnel=${phaseResult.funnel.funnelStep} Qual=${phaseResult.qual} #${phaseResult.n + 1}${isStuck ? ' ⚠️STUCK' : ''}`);
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const temp = 0.7 + (attempt * 0.15);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const temp = 0.7 + (attempt * 0.12);
     let retryHint = '';
     if (attempt > 0) retryHint = `\n\n⚠️ TENTATIVE ${attempt + 1}: TA RÉPONSE PRÉCÉDENTE ÉTAIT TROP SIMILAIRE À UN MSG DÉJÀ ENVOYÉ. Tu DOIS changer: 1) les MOTS 2) la STRUCTURE 3) l'IDÉE/ANGLE. Si t'as posé une question avant → cette fois VALIDE ou REFORMULE. Si t'as parlé de blocage → parle d'AUTRE CHOSE. TOTALEMENT DIFFÉRENT.`;
     try {
@@ -1095,9 +1116,14 @@ export default async function handler(req: Request): Promise<Response> {
     const funnel = getFunnelState(history);
     // Forcer pattern vocal si détecté au body level (priorité sur image_link)
     const pattern = isVoiceMessage ? 'voice_message' : detectPattern(msg);
-    const recentBotMsgs = history.slice(-10).map((h: any) => h.bot_response || '').filter(Boolean);
-    // DÉTECTION SPIRALE: si les 3 dernières réponses sont identiques ou quasi-identiques → forcer Claude
-    const isStuck = recentBotMsgs.length >= 3 && recentBotMsgs.slice(-3).every((r, _, arr) => calculateSimilarity(r, arr[0]) > 0.5);
+    const recentBotMsgs = history.slice(-12).map((h: any) => h.bot_response || '').filter(Boolean);
+    // DÉTECTION SPIRALE: si parmi les 3 dernières réponses, 2+ se ressemblent → forcer Mistral avec reset
+    const lastThree = recentBotMsgs.slice(-3);
+    const isStuck = lastThree.length >= 3 && (
+      calculateSimilarity(lastThree[0], lastThree[1]) > 0.3 ||
+      calculateSimilarity(lastThree[1], lastThree[2]) > 0.3 ||
+      calculateSimilarity(lastThree[0], lastThree[2]) > 0.3
+    );
     if (isStuck) console.log('[V65] ⚠️ SPIRALE DÉTECTÉE — forçage Claude avec reset');
     let response: string | null = null;
     // === ANTI-DÉTECTION: images + questions bot ===
