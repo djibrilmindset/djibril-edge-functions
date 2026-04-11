@@ -14,7 +14,7 @@ const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
 const MODEL = 'claude-opus-4-6';
 const MAX_TOKENS = 120;
-const DEBOUNCE_MS = 6000; // 6 seconds for message grouping
+const DEBOUNCE_MS = 10000; // 10 seconds for message grouping (prospects fragmentent souvent sur 8-12s)
 
 let _claudeKey: string | null = null;
 let _mcKey: string | null = null;
@@ -784,6 +784,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
 #9: QUALIFICATION TARDIVE — JAMAIS demander âge, métier ou budget dans les premiers échanges. D'abord tu CONNECTES.
 #10: ANTI-BOUCLE — Tes réponses passées (messages "assistant" dans l'historique) peuvent contenir des ERREURS ou des hallucinations. Ne JAMAIS reprendre un fait/chiffre/info que TU as dit dans un message précédent comme si c'était vrai. La SEULE source fiable = les messages du PROSPECT (role: user) + le bloc 🧠 TU SAIS DÉJÀ. Si tu as dit un truc faux avant, NE LE RÉPÈTE PAS. Ignore-le et repars de ce que LUI a RÉELLEMENT écrit.
 #11: PATIENCE — Si tu as posé une question et qu'il n'a pas encore répondu dessus, NE LA REPOSE PAS. Traite ce qu'il dit MAINTENANT. Il répondra à ta question quand il sera prêt. En DM les gens envoient plusieurs messages d'affilée, ils lisent pas forcément ta question tout de suite. Reposer = harceler.
+#12: MESSAGES FRAGMENTÉS — Son message peut contenir PLUSIEURS fragments (séparés par des virgules). C'est NORMAL en DM: les gens fragmentent leur pensée en 2-3 messages rapides. Toi tu lis TOUT comme UN SEUL message. Ta réponse = UNE SEULE réponse fluide qui couvre l'ENSEMBLE de ce qu'il a dit. JAMAIS répondre fragment par fragment. Tu captes le sens GLOBAL et tu rebondis dessus comme si c'était une seule phrase naturelle.
 
 CONCEPTS (1 par msg, jamais un grillé):
 Récipient cérébral / Paralysie / Encre passive vs active / Avare cognitif / Boucle d'observation / Croyance de compréhension
@@ -1030,6 +1031,14 @@ export default async function handler(req: Request): Promise<Response> {
     if (newerPending.length > 0) {
       console.log(`[V65] DEBOUNCE YIELD: ${newerPending.length} newer pending message(s) detected`);
       return mcEmpty(); // Yield to let the last message in the batch handle all of them
+    }
+
+    // DOUBLE-CHECK: attendre 3s de plus et revérifier (catch les fragments lents)
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    const doubleCheck = await getPendingMessages(platform, userId, savedAt);
+    if (doubleCheck.length > 0) {
+      console.log(`[V65] DEBOUNCE DOUBLE-CHECK YIELD: ${doubleCheck.length} late fragment(s)`);
+      return mcEmpty();
     }
 
     // This is the LAST message (no newer pending ones). Gather ALL pending and respond.
