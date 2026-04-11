@@ -175,11 +175,11 @@ async function describeImage(imageUrl: string): Promise<string | null> {
         messages: [{
           role: 'user',
           content: [
-            { type: 'text', text: 'Décris cette image en 1-2 phrases courtes en français. Contexte: un prospect Instagram envoie cette image dans une conversation DM. Dis ce que tu vois de façon factuelle et concise. Si c\'est un screenshot de texte, transcris le texte.' },
+            { type: 'text', text: 'Décris cette image en 2-4 phrases en français. Sois TRÈS PRÉCIS sur :\n- Les COULEURS exactes (rouge, bleu marine, beige, noir, etc.)\n- Les textes visibles (transcris-les mot pour mot)\n- Les objets, vêtements, lieux, personnes\n- L\'ambiance générale (sombre, lumineux, coloré, etc.)\nContexte: un prospect Instagram envoie cette image en DM. Décris factuellement ce que tu VOIS. Si c\'est un screenshot, transcris TOUT le texte visible.' },
             { type: 'image_url', image_url: { url: imageUrl } }
           ]
         }],
-        max_tokens: 200,
+        max_tokens: 350,
       }),
     });
     if (!response.ok) { console.log(`[V69] Pixtral error: ${response.status}`); return null; }
