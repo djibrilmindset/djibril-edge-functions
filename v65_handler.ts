@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V68 — V67 + PIXTRAL VISION (images) + WHISPER TRANSCRIPTION (vocaux) ===
+// === V69 — V68.1 + CONTENT-TYPE DETECTION (HEAD request → audio/image auto-detect) ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -56,45 +56,91 @@ async function getMcKey(): Promise<string | null> {
 
 // === MEDIA PROCESSING: PIXTRAL (images) + WHISPER (audio) ===
 
-function extractMediaUrl(body: any): { type: 'image' | 'audio' | null; url: string | null } {
-  // 1. Chercher dans attachments (format ManyChat standard)
+// V69: Détection RÉELLE du type média via HEAD request (Content-Type header)
+// ManyChat IG ne différencie PAS audio/image dans le payload → on check le fichier directement
+async function detectMediaTypeFromUrl(url: string): Promise<'image' | 'audio' | null> {
+  try {
+    // HEAD request pour lire Content-Type sans télécharger le fichier
+    const headRes = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+    if (!headRes.ok) {
+      console.log(`[V69] HEAD request failed (${headRes.status}) → fallback GET`);
+      // Certains CDN refusent HEAD → on fait un GET partiel
+      const getRes = await fetch(url, { headers: { 'Range': 'bytes=0-0' }, redirect: 'follow' });
+      const ct = getRes.headers.get('content-type') || '';
+      console.log(`[V69] GET partial Content-Type: "${ct}"`);
+      if (/^audio\//i.test(ct) || /ogg|opus|mp4a|mpeg|wav|aac|m4a|webm/i.test(ct)) return 'audio';
+      if (/^image\//i.test(ct) || /jpeg|png|gif|webp/i.test(ct)) return 'image';
+      if (/^video\//i.test(ct)) return 'audio'; // vidéo IG = souvent vocal
+      return null;
+    }
+    const contentType = headRes.headers.get('content-type') || '';
+    console.log(`[V69] HEAD Content-Type: "${contentType}" pour ${url.substring(0, 60)}`);
+    if (/^audio\//i.test(contentType) || /ogg|opus|mp4a|mpeg|wav|aac|m4a/i.test(contentType)) return 'audio';
+    if (/^image\//i.test(contentType) || /jpeg|png|gif|webp/i.test(contentType)) return 'image';
+    if (/^video\//i.test(contentType)) return 'audio'; // vidéo courte IG = vocal souvent
+    // Octet-stream / inconnu → tenter l'extension de l'URL
+    if (/\.ogg|\.m4a|\.opus|\.mp3|\.wav|\.aac/i.test(url)) return 'audio';
+    if (/\.jpg|\.jpeg|\.png|\.gif|\.webp/i.test(url)) return 'image';
+    console.log(`[V69] ⚠️ Content-Type inconnu: "${contentType}" — type null`);
+    return null;
+  } catch (e: any) {
+    console.error(`[V69] detectMediaType error: ${e.message}`);
+    // Fallback extension
+    if (/\.ogg|\.m4a|\.opus|\.mp3|\.wav|\.aac/i.test(url)) return 'audio';
+    if (/\.jpg|\.jpeg|\.png|\.gif|\.webp/i.test(url)) return 'image';
+    return null;
+  }
+}
+
+// V69: Extraire l'URL média du body ManyChat (SANS deviner le type)
+function extractMediaUrlRaw(body: any): string | null {
+  // 1. Chercher dans attachments
   if (body.attachments && Array.isArray(body.attachments)) {
     for (const att of body.attachments) {
       const url = att.url || att.payload?.url || att.file_url || '';
-      const type = att.type || att.media_type || '';
-      if (/audio|voice|vocal/i.test(type) || /\.ogg|\.m4a|\.opus|\.mp3|\.wav|\.aac/i.test(url)) {
-        return { type: 'audio', url };
-      }
-      if (/image|photo/i.test(type) || /\.jpg|\.jpeg|\.png|\.gif|\.webp/i.test(url) || /scontent|fbcdn|lookaside\.fbsbx/i.test(url)) {
-        return { type: 'image', url };
-      }
+      if (url && /^https?:\/\//i.test(url)) return url;
     }
   }
-  // 2. Chercher dans le body direct
-  if (body.attachment_url || body.media_url || body.file_url) {
-    const url = body.attachment_url || body.media_url || body.file_url;
-    if (/\.ogg|\.m4a|\.opus|\.mp3|\.wav|\.aac|audio/i.test(url)) return { type: 'audio', url };
-    if (/\.jpg|\.jpeg|\.png|\.gif|\.webp|scontent|fbcdn|lookaside/i.test(url)) return { type: 'image', url };
-  }
-  // 3. Extraire URL depuis le message texte
+  // 2. Body direct
+  const directUrl = body.attachment_url || body.media_url || body.file_url || '';
+  if (directUrl && /^https?:\/\//i.test(directUrl)) return directUrl;
+  // 3. URL dans le message texte (lookaside.fbsbx.com ou autre CDN)
   const msg = body.message || body.last_input_text || body.text || '';
-  const urlMatch = msg.match(/(https?:\/\/[^\s]+\.(ogg|m4a|opus|mp3|wav|aac))/i);
-  if (urlMatch) return { type: 'audio', url: urlMatch[1] };
-  const imgMatch = msg.match(/(https?:\/\/[^\s]+(\.jpg|\.jpeg|\.png|\.gif|\.webp|scontent[^\s]*|fbcdn[^\s]*|lookaside\.fbsbx[^\s]*))/i);
-  if (imgMatch) return { type: 'image', url: imgMatch[1] };
-  return { type: null, url: null };
+  const urlMatch = msg.match(/(https?:\/\/lookaside\.fbsbx\.com[^\s]*)/i)
+    || msg.match(/(https?:\/\/scontent[^\s]*)/i)
+    || msg.match(/(https?:\/\/[^\s]+\.(ogg|m4a|opus|mp3|wav|aac|jpg|jpeg|png|gif|webp))/i);
+  if (urlMatch) return urlMatch[1];
+  return null;
+}
+
+// V69: Extraction complète = URL + détection Content-Type réel
+async function extractMediaInfo(body: any): Promise<{ type: 'image' | 'audio' | null; url: string | null }> {
+  const url = extractMediaUrlRaw(body);
+  if (!url) return { type: null, url: null };
+
+  // D'abord checker si le body a un type fiable (rare mais possible)
+  const bodyType = body.attachment_type || body.type || '';
+  if (/audio|voice|vocal/i.test(bodyType)) {
+    console.log(`[V69] Body dit audio → skip HEAD, type=audio`);
+    return { type: 'audio', url };
+  }
+
+  // V69 FIX PRINCIPAL: HEAD request pour détecter le vrai type
+  const detectedType = await detectMediaTypeFromUrl(url);
+  console.log(`[V69] URL détectée: ${url.substring(0, 60)} → type: ${detectedType}`);
+  return { type: detectedType, url };
 }
 
 async function transcribeAudio(audioUrl: string): Promise<string | null> {
   const openaiKey = await getOpenAIKey();
   if (!openaiKey) {
-    console.log('[V68] ⚠️ Pas de clé OpenAI — transcription audio impossible');
+    console.log('[V69] ⚠️ Pas de clé OpenAI — transcription audio impossible');
     return null;
   }
   try {
     // Télécharger le fichier audio
     const audioResponse = await fetch(audioUrl);
-    if (!audioResponse.ok) { console.log(`[V68] Audio fetch failed: ${audioResponse.status}`); return null; }
+    if (!audioResponse.ok) { console.log(`[V69] Audio fetch failed: ${audioResponse.status}`); return null; }
     const audioBlob = await audioResponse.blob();
     // Envoyer à Whisper
     const formData = new FormData();
@@ -107,12 +153,12 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
       headers: { 'Authorization': `Bearer ${openaiKey}` },
       body: formData,
     });
-    if (!whisperResponse.ok) { console.log(`[V68] Whisper error: ${whisperResponse.status}`); return null; }
+    if (!whisperResponse.ok) { console.log(`[V69] Whisper error: ${whisperResponse.status}`); return null; }
     const transcription = (await whisperResponse.text()).trim();
-    console.log(`[V68] 🎤 Whisper transcription: "${transcription.substring(0, 100)}"`);
+    console.log(`[V69] 🎤 Whisper transcription: "${transcription.substring(0, 100)}"`);
     return transcription || null;
   } catch (e: any) {
-    console.error('[V68] transcribeAudio error:', e.message);
+    console.error('[V69] transcribeAudio error:', e.message);
     return null;
   }
 }
@@ -136,13 +182,13 @@ async function describeImage(imageUrl: string): Promise<string | null> {
         max_tokens: 200,
       }),
     });
-    if (!response.ok) { console.log(`[V68] Pixtral error: ${response.status}`); return null; }
+    if (!response.ok) { console.log(`[V69] Pixtral error: ${response.status}`); return null; }
     const data = await response.json();
     const description = data.choices?.[0]?.message?.content?.trim();
-    console.log(`[V68] 📸 Pixtral description: "${(description || '').substring(0, 100)}"`);
+    console.log(`[V69] 📸 Pixtral description: "${(description || '').substring(0, 100)}"`);
     return description || null;
   } catch (e: any) {
-    console.error('[V68] describeImage error:', e.message);
+    console.error('[V69] describeImage error:', e.message);
     return null;
   }
 }
@@ -1107,7 +1153,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   const effectiveMsg = (mType === 'audio' && mText) ? mText : msg;
   const messages = buildMessages(history, effectiveMsg, mem, mCtx);
   const tokens = isDistress ? 100 : MAX_TOKENS;
-  console.log(`[V68] Phase=${phaseResult.phase} Trust=${phaseResult.trust} Funnel=${phaseResult.funnel.funnelStep} Qual=${phaseResult.qual} #${phaseResult.n + 1}${isStuck ? ' ⚠️STUCK' : ''}${mText ? ` 📎MEDIA=${mType}` : ''}`);
+  console.log(`[V69] Phase=${phaseResult.phase} Trust=${phaseResult.trust} Funnel=${phaseResult.funnel.funnelStep} Qual=${phaseResult.qual} #${phaseResult.n + 1}${isStuck ? ' ⚠️STUCK' : ''}${mText ? ` 📎MEDIA=${mType}` : ''}`);
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const temp = 0.7 + (attempt * 0.12);
@@ -1171,43 +1217,26 @@ export default async function handler(req: Request): Promise<Response> {
     const platform = body.platform || 'instagram';
     const userMessage = extractUserMessage(body);
     const isStoryInteraction = !!(body.story_reply || body.ig_story_reply || body.story_mention || body.story?.reply || body.story?.mention);
-    // Détection vocal/audio au niveau du body ManyChat (avant extraction texte)
-    const isVoiceMessage = !!(body.attachment_type === 'audio' || body.type === 'audio' || body.media_type === 'audio'
-      || body.attachments?.some?.((a: any) => a.type === 'audio' || /audio|voice|vocal|\.ogg|\.m4a|\.opus|\.mp3/i.test(a.url || a.payload?.url || ''))
-      || (userMessage && /\.ogg|\.m4a|\.opus|\.mp3|audio_clip|voice_message|vocal/i.test(userMessage)));
-
-    // === V68: EXTRACTION + TRAITEMENT MÉDIA (Pixtral / Whisper) ===
-    let media = extractMediaUrl(body);
-    // FIX: ManyChat envoie les vocaux comme URL lookaside.fbsbx.com — même pattern que les images
-    // Si isVoiceMessage est détecté par le body mais extractMediaUrl a dit "image" → forcer en audio
-    if (isVoiceMessage && media.url && media.type !== 'audio') {
-      console.log(`[V68] 🔄 Override: isVoiceMessage=true mais extractMediaUrl dit "${media.type}" → forcé en audio`);
-      media = { type: 'audio', url: media.url };
-    }
-    // Si isVoiceMessage est true mais extractMediaUrl n'a pas trouvé d'URL → extraire depuis le message
-    if (isVoiceMessage && !media.url && userMessage) {
-      const urlMatch = userMessage.match(/(https?:\/\/[^\s]+)/i);
-      if (urlMatch) {
-        console.log(`[V68] 🔄 Extraction URL audio depuis userMessage: ${urlMatch[1].substring(0, 60)}`);
-        media = { type: 'audio', url: urlMatch[1] };
-      }
-    }
+    // === V69: EXTRACTION + DÉTECTION MÉDIA PAR CONTENT-TYPE (HEAD request) ===
+    // Plus besoin de isVoiceMessage — on détecte le type RÉEL du fichier via HTTP
+    const media = await extractMediaInfo(body);
+    const isVoiceMessage = media.type === 'audio'; // dérivé du Content-Type réel
     let mediaProcessedText: string | null = null;
     let mediaContext: string | null = null;
     if (media.type === 'audio' && media.url) {
-      console.log(`[V68] 🎤 Audio détecté: ${media.url.substring(0, 80)}`);
+      console.log(`[V69] 🎤 Audio détecté par Content-Type: ${media.url.substring(0, 80)}`);
       mediaProcessedText = await transcribeAudio(media.url);
       if (mediaProcessedText) {
         mediaContext = `[Le prospect a envoyé un MESSAGE VOCAL. Transcription: "${mediaProcessedText}"]\nRéponds comme si tu avais ÉCOUTÉ son vocal. JAMAIS mentionner "transcription", "vocal", "audio". Tu l'as ENTENDU, point.`;
-        console.log(`[V68] ✅ Vocal transcrit: "${mediaProcessedText.substring(0, 80)}"`);
+        console.log(`[V69] ✅ Vocal transcrit: "${mediaProcessedText.substring(0, 80)}"`);
       }
-    } else if (media.type === 'image' && media.url && !isVoiceMessage) {
-      console.log(`[V68] 📸 Image détectée: ${media.url.substring(0, 80)}`);
+    } else if (media.type === 'image' && media.url) {
+      console.log(`[V69] 📸 Image détectée par Content-Type: ${media.url.substring(0, 80)}`);
       const imageDesc = await describeImage(media.url);
       if (imageDesc) {
         mediaProcessedText = imageDesc;
         mediaContext = `[Le prospect a envoyé une IMAGE. Ce que tu vois: "${imageDesc}"]\nRéponds comme si tu VOYAIS l'image. JAMAIS mentionner "description", "analyse d'image", "intelligence artificielle". Tu VOIS l'image, point. Commente naturellement ce que tu observes.`;
-        console.log(`[V68] ✅ Image décrite: "${imageDesc.substring(0, 80)}"`);
+        console.log(`[V69] ✅ Image décrite: "${imageDesc.substring(0, 80)}"`);
       }
     }
 
@@ -1217,7 +1246,7 @@ export default async function handler(req: Request): Promise<Response> {
     const isLiveChat = !!(body.live_chat || body.is_live_chat || body.live_chat_active || body.operator_id || body.agent_id
       || body.custom_fields?.live_chat || body.custom_fields?.bot_paused
       || (body.source && body.source !== 'automation' && body.source !== 'flow'));
-    console.log(`[V68] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, media: media.type, mediaProcessed: !!mediaProcessedText, liveChat: isLiveChat, profile: { name: profile.fullName, ig: profile.igUsername, metier: profile.metierIndice } })}`);
+    console.log(`[V69] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, media: media.type, mediaProcessed: !!mediaProcessedText, liveChat: isLiveChat, profile: { name: profile.fullName, ig: profile.igUsername, metier: profile.metierIndice } })}`);
     if (!userId || !userMessage) return mcRes('Envoie-moi un message');
 
     // COMMANDES ADMIN: //pause, //resume, //outbound (envoyées manuellement par Djibril)
@@ -1316,13 +1345,13 @@ export default async function handler(req: Request): Promise<Response> {
       if (!msg || msg === '[🎤 Vocal]') msg = mediaProcessedText;
       // Si le msg commence par [🎤 Vocal], extraire le texte après
       if (msg.startsWith('[🎤 Vocal]')) msg = msg.replace('[🎤 Vocal]', '').trim();
-      console.log(`[V68] 🎤 msg audio nettoyé: "${msg.substring(0, 80)}"`);
+      console.log(`[V69] 🎤 msg audio nettoyé: "${msg.substring(0, 80)}"`);
     }
     // V68: Si on a une description d'image, enrichir le msg
     if (media.type === 'image' && mediaProcessedText) {
       msg = msg.replace(/https?:\/\/lookaside\.fbsbx\.com[^\s]*/gi, '').replace(/https?:\/\/scontent[^\s]*/gi, '').trim();
       if (!msg || msg.startsWith('[📸 Image:')) msg = `[Le prospect a envoyé une image: ${mediaProcessedText}]`;
-      console.log(`[V68] 📸 msg image nettoyé: "${msg.substring(0, 80)}"`);
+      console.log(`[V69] 📸 msg image nettoyé: "${msg.substring(0, 80)}"`);
     }
     const mem = extractKnownInfo(history);
     const isDistress = detectDistress(msg, history);
@@ -1354,7 +1383,7 @@ export default async function handler(req: Request): Promise<Response> {
     if (pattern === 'voice_message' || pattern === 'image_link') {
       if (mediaProcessedText && mediaContext) {
         // ✅ MÉDIA TRAITÉ AVEC SUCCÈS — on passe au chatbot avec le contexte
-        console.log(`[V68] ✅ Média traité (${media.type}) — envoi à Mistral avec contexte`);
+        console.log(`[V69] ✅ Média traité (${media.type}) — envoi à Mistral avec contexte`);
         // On ne set PAS response ici — on laisse tomber dans le flow normal Mistral
         // mais on injecte le contexte média dans le message utilisateur
         // Le message effectif pour Mistral = transcription vocal OU texte original + contexte image
@@ -1376,7 +1405,7 @@ export default async function handler(req: Request): Promise<Response> {
         const usedDeflects = recentBotMsgs.filter(r => mediaDeflects.some(d => calculateSimilarity(r, d) > 0.3));
         const availDeflects = mediaDeflects.filter(d => !usedDeflects.some(u => calculateSimilarity(d, u) > 0.3));
         response = (availDeflects.length ? availDeflects : mediaDeflects)[Date.now() % (availDeflects.length || mediaDeflects.length)];
-        console.log(`[V68] MEDIA DEFLECT (${pattern}) — traitement échoué, fallback`);
+        console.log(`[V69] MEDIA DEFLECT (${pattern}) — traitement échoué, fallback`);
       }
     }
     if (pattern === 'suspect_bot') {
@@ -1419,7 +1448,7 @@ export default async function handler(req: Request): Promise<Response> {
     if (!response) {
       const mInfo2 = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
       response = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile, isOutbound, mInfo2);
-      console.log(`[V68] MISTRAL ${response.length}c`);
+      console.log(`[V69] MISTRAL ${response.length}c`);
     }
     if (hasSalamBeenSaid(history) && /^salam/i.test(response)) {
       response = response.replace(/^salam[\s!?.]*(?:aleykoum)?[\s!?.]*(?:fr[eé]rot)?[\s!?.,]*/i, '').trim();
