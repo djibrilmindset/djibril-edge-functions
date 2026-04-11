@@ -940,7 +940,7 @@ function extractUserMessage(body: any): string | null {
   return null;
 }
 
-export async function handler(req: Request): Promise<Response> {
+export default async function handler(req: Request): Promise<Response> {
   try {
     if (req.method === 'OPTIONS') return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' } });
     const techPromise = loadTechniques();
@@ -1112,3 +1112,4 @@ export async function handler(req: Request): Promise<Response> {
     return mcRes("Souci technique frérot, réessaie !");
   }
 }
+
