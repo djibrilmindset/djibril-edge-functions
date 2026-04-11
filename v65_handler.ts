@@ -644,7 +644,8 @@ function clean(text: string): string {
   r = r.replace(/\b(Pellabère|Cialdini|Camp|Voss|LearnErra|VOIR-NOMMER|PERMETTRE-GUIDER|affect labeling|neediness|social proof)\b/gi, '');
   r = r.replace(/\b(DRDP|FOMO|PAS\/PAP|FAB|CTA)\b/g, '');
   // ANTI-LEAK concepts internes: strip les termes psycho/système qui doivent jamais arriver au prospect
-  r = r.replace(/\b(encre|récipient|System 1|System 2|dopamine|boucle cognitive|ancrage cognitif|biais cognitif|dissonance cognitive|Kahneman)\b/gi, '');
+  r = r.replace(/récipient\s+cérébral/gi, '');
+  r = r.replace(/\b(encre\s+(passive|active)|récipient|System 1|System 2|dopamine|boucle cognitive|ancrage cognitif|biais cognitif|dissonance cognitive|Kahneman|encre)\b/gi, '');
   r = r.replace(/#\d+\s*:/g, '');
   r = r.replace(/\b(système|system)\s*(prompt|instruction|directive|rule|règle)/gi, '');
   r = r.replace(/\n\n+/g, '\n').replace(/\n/g, ' ').trim().replace(/^\s*[-\u2022]\s*/gm, '');
@@ -685,11 +686,27 @@ function clean(text: string): string {
         r = bp > 0 ? r.substring(0, urlEnd + bp + 1).trim() : r.substring(0, Math.min(r.length, urlEnd + 30)).trim();
       }
     } else {
-      // Pas d'URL → troncature classique
+      // Pas d'URL → troncature intelligente: couper sur une FIN DE PHRASE, jamais en plein milieu
       const cut = r.substring(0, 220);
-      const bp = Math.max(cut.lastIndexOf('.'), cut.lastIndexOf('?'), cut.lastIndexOf('!'));
-      r = bp > 100 ? r.substring(0, bp + 1) : cut.trim();
+      // Chercher le dernier séparateur de phrase (?, !, virgule avec espace après)
+      const bp = Math.max(cut.lastIndexOf('?'), cut.lastIndexOf('!'));
+      const bpComma = cut.lastIndexOf(', ');
+      const bestBreak = bp > 40 ? bp : (bpComma > 40 ? bpComma : -1);
+      if (bestBreak > 40) {
+        r = r.substring(0, bestBreak + 1).trim();
+      } else {
+        // Aucun break propre trouvé → couper au dernier espace pour pas couper un mot
+        const lastSpace = cut.lastIndexOf(' ');
+        r = lastSpace > 40 ? r.substring(0, lastSpace).trim() : cut.trim();
+      }
     }
+  }
+  // ANTI-PHRASE-COUPÉE: vérifier que le message ne se termine pas en plein milieu d'une idée
+  // Si le message finit par un mot de liaison/transition → phrase incomplète, on coupe avant
+  const trailingIncomplete = /\b(que|qui|les|des|un|une|le|la|de|du|et|ou|mais|car|si|ce|cette|ces|son|sa|ses|mon|ma|mes|ton|ta|tes|pour|dans|sur|par|avec|est|sont|a|ont|fait|être|avoir|quand|comme|où|dont)\s*$/i;
+  if (trailingIncomplete.test(r)) {
+    const lastSafe = Math.max(r.lastIndexOf('?'), r.lastIndexOf('!'), r.lastIndexOf(', '));
+    if (lastSafe > 30) r = r.substring(0, lastSafe + 1).trim();
   }
   return r;
 }
@@ -859,7 +876,7 @@ INTERDIT: affirmer des choses sur sa vie qu'il a pas dites, diagnostiquer/psycha
 ✏️ PONCTUATION NATURELLE: ÉVITE les points en fin de phrase. Un mec de 23 ans en DM il met PAS de point à la fin. Il écrit "je capte" pas "Je capte." Les points ça fait scolaire, trop appliqué, pas naturel. Les seules ponctuations autorisées: ? (questions) et parfois ! (énergie). Le reste = rien, juste le message brut comme sur un tel.
 🗣️ FRÉROT MODÉRÉ: "frérot" c'est cool mais PAS à chaque message. Maximum 1 frérot tous les 4-5 messages. Varie: parfois "frérot", parfois rien, parfois "mon gars", parfois juste tu parles direct sans appellation. Si t'as déjà dit frérot dans les 3 derniers messages → INTERDIT d'en remettre un.
 🔀 VARIATION OUVERTURE OBLIGATOIRE: JAMAIS commencer 2 messages de suite par le même mot ou la même tournure. Si t'as commencé par "Yo" → commence autrement. Si t'as fait "T'es en train de me dire" → fais AUTRE CHOSE. Regarde le PREMIER MOT de chaque msg dans ⛔ DÉJÀ DIT et commence par un mot DIFFÉRENT à chaque fois. Exemples de variations: commencer par une reformulation de ses mots, par une question directe, par un constat court, par un "Attends" ou "Genre" ou "Ah" — mais JAMAIS le même 2 fois. Le prospect doit sentir un HUMAIN qui improvise, PAS un robot qui boucle.
-🧠 TERMES INTERNES INTERDITS DANS LE MESSAGE: JAMAIS utiliser les mots "encre", "récipient", "System 1", "dopamine", "boucle cognitive", "ancrage" ou tout concept psycho technique. Tu parles comme un MEC, pas comme un bouquin de psycho. Si tu veux exprimer une idée psycho → traduis-la en langage de la rue.
+🧠 TERMES INTERNES INTERDITS DANS LE MESSAGE: JAMAIS utiliser les mots "encre", "récipient", "récipient cérébral", "encre passive", "encre active", "System 1", "System 2", "dopamine", "boucle cognitive", "ancrage", "biais cognitif", "dissonance cognitive", "Kahneman" ou tout concept psycho technique. Ces mots sont des outils INTERNES, le prospect doit JAMAIS les voir. Tu parles comme un MEC de 23 ans, pas comme un bouquin de psycho. Si tu veux exprimer une idée psycho → traduis-la en mots simples de la rue. Exemple: au lieu de "récipient cérébral" → "ce que t'as dans la tête". Au lieu de "dopamine" → "le kif".
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_VALEUR}. ⛔ INTERDIT: landing page et Calendly (PAS ENCORE).` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_LANDING}. ⛔ INTERDIT: Calendly (LANDING D'ABORD).` : `LIEN AUTORISÉ: ${CALENDLY_LINK}. Les autres liens ont déjà été envoyés.`}
 
 ${pending.hasPending ? `\n⏸️ PATIENCE: Ta dernière question "${pending.question.substring(0, 80)}" est ENCORE EN ATTENTE (${pending.turnsWaiting} msg depuis). ${pending.turnsWaiting >= 2 ? 'ABANDONNE cette question, passe à autre chose.' : 'NE LA REPOSE PAS. Réponds à ce qu\'il dit MAINTENANT. Laisse-lui le temps. Il reviendra dessus quand il sera prêt. Si tu reposes la même question → il va se sentir harcelé.'}` : ''}
