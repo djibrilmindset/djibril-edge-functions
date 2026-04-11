@@ -175,11 +175,11 @@ async function describeImage(imageUrl: string): Promise<string | null> {
         messages: [{
           role: 'user',
           content: [
-            { type: 'text', text: 'Décris cette image en 2-4 phrases en français. Sois TRÈS PRÉCIS sur :\n- Les COULEURS exactes (rouge, bleu marine, beige, noir, etc.)\n- Les textes visibles (transcris-les mot pour mot)\n- Les objets, vêtements, lieux, personnes\n- L\'ambiance générale (sombre, lumineux, coloré, etc.)\nContexte: un prospect Instagram envoie cette image en DM. Décris factuellement ce que tu VOIS. Si c\'est un screenshot, transcris TOUT le texte visible.' },
+            { type: 'text', text: 'Décris cette image en 3-5 phrases en français. Sois EXTRÊMEMENT PRÉCIS:\n\n1) PERSONNES (PRIORITÉ ABSOLUE): S\'il y a une ou plusieurs personnes → dis IMMÉDIATEMENT si c\'est un HOMME ou une FEMME (ou plusieurs). Décris: âge approximatif, couleur de peau, coupe de cheveux, expression du visage (sourire, sérieux, etc.), posture.\n2) COULEURS EXACTES: Nomme CHAQUE couleur visible (rouge, bleu marine, beige clair, noir, blanc cassé, etc.). Pour les vêtements: "il porte un t-shirt NOIR et un pantalon GRIS".\n3) TEXTES VISIBLES: Transcris mot pour mot TOUT texte visible (enseignes, écrans, légendes, watermarks).\n4) LIEU + AMBIANCE: Intérieur/extérieur ? Lumineux/sombre ? Quel type d\'endroit (chambre, bureau, salon de coiffure, rue, voiture, salle de sport) ?\n5) OBJETS IMPORTANTS: Téléphone, ordinateur, produits, nourriture, voiture, etc.\n\nContexte: un prospect Instagram envoie cette image en DM. Si c\'est un screenshot de texte → transcris TOUT. Si c\'est un selfie → décris la personne EN DÉTAIL (homme/femme, ce qu\'il/elle porte, son expression).' },
             { type: 'image_url', image_url: { url: imageUrl } }
           ]
         }],
-        max_tokens: 350,
+        max_tokens: 500,
       }),
     });
     if (!response.ok) { console.log(`[V69] Pixtral error: ${response.status}`); return null; }
@@ -812,6 +812,14 @@ function clean(text: string): string {
   r = r.replace(/\{\{[^}]*\}\}/g, '').replace(/\{%[^%]*%\}/g, '');
   // ANTI-PLACEHOLDER: supprimer tout texte entre crochets [comme ça] qui est une instruction non-résolue
   r = r.replace(/\[[^\]]{5,}\]/g, '').replace(/\s{2,}/g, ' ').trim();
+  // ANTI-MARKDOWN: strip gras **texte**, italique *texte*, souligné, etc. — Djibril tape sur son tel, pas de formatage
+  r = r.replace(/\*\*([^*]+)\*\*/g, '$1'); // **gras** → gras
+  r = r.replace(/\*([^*]+)\*/g, '$1');     // *italique* → italique
+  r = r.replace(/__([^_]+)__/g, '$1');     // __souligné__ → souligné
+  r = r.replace(/_([^_]+)_/g, '$1');       // _italique_ → italique
+  r = r.replace(/`([^`]+)`/g, '$1');       // `code` → code
+  r = r.replace(/^#+\s*/gm, '');           // # titres → rien
+  r = r.replace(/^[-*]\s+/gm, '');         // - listes → rien
   // ANTI-EMOJI: strip TOUS les émojis — Djibril parle comme un mec, pas un CM
   r = r.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '');
   // Nettoyage espaces multiples après strips
@@ -1039,8 +1047,10 @@ INTERDIT: affirmer des choses sur sa vie qu'il a pas dites, diagnostiquer/psycha
 
 1-2 phrases MAX. 1 BLOC. MAX ${maxChars} chars. ZÉRO ÉMOJI. Tu mets JAMAIS d'émoji. C'est un mec de 23 ans qui écrit, pas un community manager. Les rares exceptions (1 max tous les 10 messages): uniquement pour renforcer un moment fort, genre quand tu envoies un lien ou que tu félicites. Sinon = ZÉRO. "Adam" INTERDIT. ${salamRule} JAMAIS de prix.
 ✏️ PONCTUATION NATURELLE: ÉVITE les points en fin de phrase. Un mec de 23 ans en DM il met PAS de point à la fin. Il écrit "je capte" pas "Je capte." Les points ça fait scolaire, trop appliqué, pas naturel. Les seules ponctuations autorisées: ? (questions) et parfois ! (énergie). Le reste = rien, juste le message brut comme sur un tel.
+📝 ZÉRO FORMATAGE: JAMAIS de gras (**mot**), JAMAIS d'italique (*mot*), JAMAIS de listes à puces, JAMAIS de markdown. Tu tapes sur ton téléphone, point. Du texte brut. Si tu mets du gras → le prospect sait direct que c'est un bot.
+💬 CONTRACTIONS OBLIGATOIRES: Écris comme un vrai mec de 23 ans qui tape vite sur son tel. Utilise les contractions naturelles: "j'sais" au lieu de "je sais", "j'fais" au lieu de "je fais", "t'as" au lieu de "tu as", "t'es" au lieu de "tu es", "j'te" au lieu de "je te", "c'est" au lieu de "cela est", "y'a" au lieu de "il y a", "j'peux" au lieu de "je peux", "j'vais" au lieu de "je vais", "t'inquiète" au lieu de "ne t'inquiète pas", "j'comprends" au lieu de "je comprends", "j'capte" au lieu de "je capte". PAS À CHAQUE MOT — varie entre forme contractée et forme normale pour rester naturel. Environ 40-60% de contractions. Ça doit sonner comme un mec qui PARLE, pas qui ÉCRIT.
 🗣️ FRÉROT MODÉRÉ: "frérot" c'est cool mais PAS à chaque message. Maximum 1 frérot tous les 4-5 messages. Varie: parfois "frérot", parfois rien, parfois "mon gars", parfois juste tu parles direct sans appellation. Si t'as déjà dit frérot dans les 3 derniers messages → INTERDIT d'en remettre un.
-🔀 VARIATION OUVERTURE OBLIGATOIRE: JAMAIS commencer 2 messages de suite par le même mot ou la même tournure. Si t'as commencé par "Yo" → commence autrement. Si t'as fait "T'es en train de me dire" → fais AUTRE CHOSE. Regarde le PREMIER MOT de chaque msg dans ⛔ DÉJÀ DIT et commence par un mot DIFFÉRENT à chaque fois. Exemples de variations: commencer par une reformulation de ses mots, par une question directe, par un constat court, par un "Attends" ou "Genre" ou "Ah" — mais JAMAIS le même 2 fois. Le prospect doit sentir un HUMAIN qui improvise, PAS un robot qui boucle.
+🔀 VARIATION OUVERTURE OBLIGATOIRE: JAMAIS commencer 2 messages de suite par le même mot ou la même tournure. Regarde les 3 PREMIERS MOTS de chaque msg dans ⛔ DÉJÀ DIT et commence par quelque chose de TOTALEMENT DIFFÉRENT. Ton ouverture = ta RÉACTION DIRECTE à ce que le prospect vient de dire. Pas un template. Exemples de variations naturelles: reformuler ses propres mots ("Tu me dis que..."), question directe sur ce qu'il vient de dire ("Attends, genre t'as...?"), réaction courte ("Ah ouais", "Grave", "J'capte"), rebond sur un détail précis ("Le truc de [son mot exact]..."), micro-validation ("C'est ça le délire"), constat brut ("En vrai..."). JAMAIS 2 fois la même structure. Chaque message doit RÉPONDRE à ce qu'il vient de dire, pas démarrer par une formule passe-partout.
 🧠 TERMES INTERNES INTERDITS DANS LE MESSAGE: JAMAIS utiliser les mots "encre", "récipient", "récipient cérébral", "encre passive", "encre active", "System 1", "System 2", "dopamine", "boucle cognitive", "ancrage", "biais cognitif", "dissonance cognitive", "Kahneman" ou tout concept psycho technique. Ces mots sont des outils INTERNES, le prospect doit JAMAIS les voir. Tu parles comme un MEC de 23 ans, pas comme un bouquin de psycho. Si tu veux exprimer une idée psycho → traduis-la en mots simples de la rue. Exemple: au lieu de "récipient cérébral" → "ce que t'as dans la tête". Au lieu de "dopamine" → "le kif".
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_VALEUR}. ⛔ INTERDIT: landing page et Calendly (PAS ENCORE).` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_LANDING}. ⛔ INTERDIT: Calendly (LANDING D'ABORD).` : `LIEN AUTORISÉ: ${CALENDLY_LINK}. Les autres liens ont déjà été envoyés.`}
 
