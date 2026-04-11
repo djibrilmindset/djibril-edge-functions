@@ -151,6 +151,50 @@ function detectDistress(msg: string, history: any[]): boolean {
   return false;
 }
 
+interface ProspectProfile {
+  fullName: string | null;
+  igUsername: string | null;
+  profilePic: string | null;
+  metierIndice: string | null; // indice métier détecté dans le nom/username
+}
+
+// Mots-clés métier détectables dans le username ou le nom IG
+const METIER_KEYWORDS: [RegExp, string][] = [
+  [/barber|coiff|hair|fade|taper/i, 'la coiffure/barberie'],
+  [/livr|deliver|uber|bolt/i, 'la livraison'],
+  [/coach|fitness|sport|muscu|gym/i, 'le coaching sportif'],
+  [/dev|code|program|tech|web|app/i, 'le développement/tech'],
+  [/photo|video|film|cinema|prod/i, 'la photo/vidéo'],
+  [/music|beat|prod|dj|rap|studio/i, 'la musique'],
+  [/design|graph|creat|art/i, 'le design/créatif'],
+  [/immo|real.?estate|agent/i, "l'immobilier"],
+  [/resto|food|cuisine|chef|boul/i, 'la restauration'],
+  [/commerce|shop|vente|market/i, 'le commerce'],
+  [/crypto|trad|bourse|forex/i, 'le trading/crypto'],
+  [/auto|garage|meca|car/i, "l'automobile"],
+  [/infirm|sante|pharma|medic/i, 'la santé'],
+  [/btp|bâtiment|chantier|elec|plomb/i, 'le BTP'],
+  [/secur|vigil|agent/i, 'la sécurité'],
+  [/transport|chauffeur|vtc|taxi/i, 'le transport'],
+  [/nettoy|clean|menage/i, 'le nettoyage'],
+];
+
+function extractProfileFromPayload(body: any): ProspectProfile {
+  const profile: ProspectProfile = { fullName: null, igUsername: null, profilePic: null, metierIndice: null };
+  // Extraire les données profil du payload ManyChat
+  profile.fullName = body.full_name || body.name || body.first_name ? `${body.first_name || ''} ${body.last_name || ''}`.trim() || body.name || body.full_name : null;
+  profile.igUsername = body.ig_username || body.username || body.instagram_username || null;
+  profile.profilePic = body.profile_pic || body.profile_pic_url || body.avatar || null;
+  // Chercher des indices métier dans le nom et le username
+  const searchText = `${profile.fullName || ''} ${profile.igUsername || ''}`.toLowerCase();
+  if (searchText.length > 2) {
+    for (const [pattern, label] of METIER_KEYWORDS) {
+      if (pattern.test(searchText)) { profile.metierIndice = label; break; }
+    }
+  }
+  return profile;
+}
+
 interface ProspectMemory {
   prenom: string | null; age: string | null; ageNum: number | null;
   metier: string | null; situation: string | null;
@@ -586,7 +630,7 @@ function clean(text: string): string {
   return r;
 }
 
-function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: string): string {
+function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: string, profile?: ProspectProfile): string {
   const { phase, n, trust, funnel, offerPitched, qual } = phaseResult;
   const salamDone = hasSalamBeenSaid(history);
   const salamRule = salamDone ? 'JAMAIS Salam (DÉJÀ DIT).' : (n === 0 ? 'Salam OK (1er msg).' : 'JAMAIS Salam.');
@@ -602,6 +646,19 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   const mem = extractKnownInfo(history);
   const alreadyKnownBlock = buildAlreadyKnownBlock(mem, asked);
   const funnelStatus = `\nFUNNEL: Valeur ${funnel.valeurSent ? '✅' : '❌'} | Landing ${funnel.landingSent ? '✅' : '❌'} | Calendly ${funnel.calendlySent ? '✅' : '❌'} (ordre strict)`;
+
+  // PROFIL IG: indices détectés depuis le nom/username Instagram
+  let profileBlock = '';
+  if (profile?.metierIndice && !mem.metier) {
+    // On a un INDICE métier depuis le profil, mais il l'a pas encore confirmé en conversation
+    profileBlock = `\n👁️ INDICE PROFIL IG: Son profil suggère qu'il est dans ${profile.metierIndice}. Tu peux GLISSER ça naturellement en QUESTION OUVERTE pour vérifier: "Au fait, j'ai vu sur ton profil que t'es dans ${profile.metierIndice}, c'est ça ?" — Ça montre que t'es humain, que t'as jeté un oeil. MAIS: 1) Formule TOUJOURS en question (jamais affirmer) 2) Fais-le UNE SEULE FOIS 3) Si déjà demandé → ne redemande JAMAIS 4) Attends le bon moment (pas au premier message).`;
+  }
+  if (profile?.fullName && !mem.prenom) {
+    const firstName = (profile.fullName.split(' ')[0] || '').trim();
+    if (firstName.length > 1 && firstName.length < 20) {
+      profileBlock += `\n👤 PRÉNOM PROFIL: "${firstName}" (depuis son profil IG). Tu peux l'utiliser naturellement si t'as pas encore son prénom. Ça humanise.`;
+    }
+  }
 
   // DOULEUR MÉTIER → AUTONOMIE: quand on connaît son métier, creuser comment ce métier l'empêche d'être libre
   const metierPainBlock = mem.metier ? `\n🎯 DOULEUR MÉTIER CONNUE: Il fait "${mem.metier}". CREUSE avec humilité comment CE MÉTIER PRÉCIS l'empêche d'être autonome. Questions intrinsèques adaptées: "Qu'est-ce qui fait que ${mem.metier} te laisse pas le temps de construire autre chose ?" / "Dans ${mem.metier}, c'est quoi le truc qui te bouffe le plus — le temps, l'énergie, ou la liberté ?" / "Si tu pouvais garder ce que t'aimes dans ${mem.metier} mais en étant libre financièrement et géographiquement, ça ressemblerait à quoi ?". CONNECTE toujours à l'AUTONOMIE: liberté de temps, liberté financière, liberté géographique. Le métier chronophage = le piège qui l'empêche de se suffire à lui-même. Mais HUMILITÉ: tu juges JAMAIS son métier, tu l'aides à VOIR par lui-même en quoi ça le bloque.` : '';
@@ -689,7 +746,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
       break;
   }
 
-  return `Bot DM IG Djibril Learning. FR oral. Grand frère 23 ans, passé par là. ADN DU MESSAGE: on forge le MENTAL du prospect pour qu'il devienne AUTONOME et AUTOSUFFISANT — capable de penser, décider et générer par lui-même (5-10k/mois en 80j). Le mental est le levier, l'autonomie est l'objectif, l'argent est la conséquence naturelle. On fabrique des vrais entrepreneurs qui se suffisent à eux-mêmes.${memoryBlock}${alreadyKnownBlock}${userSummary}${funnelStatus}${qualBlock}
+  return `Bot DM IG Djibril Learning. FR oral. Grand frère 23 ans, passé par là. ADN DU MESSAGE: on forge le MENTAL du prospect pour qu'il devienne AUTONOME et AUTOSUFFISANT — capable de penser, décider et générer par lui-même (5-10k/mois en 80j). Le mental est le levier, l'autonomie est l'objectif, l'argent est la conséquence naturelle. On fabrique des vrais entrepreneurs qui se suffisent à eux-mêmes.${memoryBlock}${profileBlock}${alreadyKnownBlock}${userSummary}${funnelStatus}${qualBlock}
 
 === STYLE V64 — EMPATHIE HUMBLE ===
 #1: ZÉRO AFFIRMATION SANS PREUVE — Tu ne sais QUE ce qu'il t'a DIT. JAMAIS affirmer un truc sur lui qu'il a pas écrit. Si tu devines → formule en QUESTION ou en HYPOTHÈSE: "j'ai l'impression que...", "est-ce que par hasard...", "corrige-moi si je me trompe mais...". JAMAIS: "tu vis ça" / "ton problème c'est" / "tu ressens". C'est LUI qui sait, pas toi.
@@ -795,13 +852,13 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory):
   return cleaned;
 }
 
-async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory): Promise<string> {
+async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile): Promise<string> {
   const key = await getClaudeKey();
   if (!key) return 'Souci technique frérot. Réessaie dans 2 min.';
   const isDistress = isDistressOrStuck === true && detectDistress(msg, history);
   const phaseResult = getPhase(history, msg, isDistress, mem);
   const memoryBlock = formatMemoryBlock(mem);
-  let sys = buildPrompt(history, phaseResult, memoryBlock);
+  let sys = buildPrompt(history, phaseResult, memoryBlock, profile);
   // Si spirale détectée, injecter un RESET dans le prompt
   const recentResponses = history.slice(-10).map((h: any) => h.bot_response || '').filter(Boolean);
   const isStuck = recentResponses.length >= 3 && recentResponses.slice(-3).every((r, _, arr) => calculateSimilarity(r, arr[0]) > 0.5);
@@ -882,11 +939,13 @@ export async function handler(req: Request): Promise<Response> {
     const isVoiceMessage = !!(body.attachment_type === 'audio' || body.type === 'audio' || body.media_type === 'audio'
       || body.attachments?.some?.((a: any) => a.type === 'audio' || /audio|voice|vocal|\.ogg|\.m4a|\.opus|\.mp3/i.test(a.url || a.payload?.url || ''))
       || (userMessage && /\.ogg|\.m4a|\.opus|\.mp3|audio_clip|voice_message|vocal/i.test(userMessage)));
+    // EXTRACTION PROFIL IG depuis le payload ManyChat
+    const profile = extractProfileFromPayload(body);
     // DÉTECTION LIVE CHAT / INTERVENTION MANUELLE
     const isLiveChat = !!(body.live_chat || body.is_live_chat || body.live_chat_active || body.operator_id || body.agent_id
       || body.custom_fields?.live_chat || body.custom_fields?.bot_paused
       || (body.source && body.source !== 'automation' && body.source !== 'flow'));
-    console.log(`[V65] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, liveChat: isLiveChat })}`);
+    console.log(`[V65] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, liveChat: isLiveChat, profile: { name: profile.fullName, ig: profile.igUsername, metier: profile.metierIndice } })}`);
     if (!userId || !userMessage) return mcRes('Envoie-moi un message frérot.');
 
     // COMMANDES ADMIN: //pause et //resume (envoyées manuellement par Djibril)
@@ -957,7 +1016,7 @@ export async function handler(req: Request): Promise<Response> {
 
     if (isDistress) {
       console.log('[V65] DISTRESS MODE');
-      const response = await generateWithRetry(userId, platform, msg, history, true, mem);
+      const response = await generateWithRetry(userId, platform, msg, history, true, mem, profile);
       let sent = false;
       if (subscriberId) { sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
       await updatePendingResponses(platform, userId, response);
@@ -996,7 +1055,7 @@ export async function handler(req: Request): Promise<Response> {
       if (response) console.log('[V65] DIRECT');
     }
     if (!response) {
-      response = await generateWithRetry(userId, platform, msg, history, isStuck, mem);
+      response = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile);
       console.log(`[V65] CLAUDE ${response.length}c`);
     }
     if (hasSalamBeenSaid(history) && /^salam/i.test(response)) {
