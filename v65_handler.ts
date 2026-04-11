@@ -353,7 +353,14 @@ function calculateSimilarity(text1: string, text2: string): number {
   return Math.max(kwScore, bgScore) + startPenalty;
 }
 function isTooSimilar(response: string, recentBotResponses: string[]): boolean {
-  for (const recent of recentBotResponses) { if (calculateSimilarity(response, recent) > 0.18) return true; }
+  const responseStart = getStartSignature(response);
+  for (const recent of recentBotResponses) {
+    // Check similarité globale
+    if (calculateSimilarity(response, recent) > 0.18) return true;
+    // Check début identique (les 4 premiers mots) — même si le reste est différent
+    const recentStart = getStartSignature(recent);
+    if (responseStart.length > 5 && responseStart === recentStart) return true;
+  }
   return false;
 }
 function hasSalamBeenSaid(history: any[]): boolean {
@@ -636,6 +643,8 @@ function clean(text: string): string {
   r = r.replace(/\b(Trust|FUNNEL|QUAL|PHASE|NEED_VALEUR|NEED_LANDING|NEED_CALENDLY|COMPLETE|funnelStep|phaseInstr|maxChars|botBans|conceptBans)\b/g, '');
   r = r.replace(/\b(Pellabère|Cialdini|Camp|Voss|LearnErra|VOIR-NOMMER|PERMETTRE-GUIDER|affect labeling|neediness|social proof)\b/gi, '');
   r = r.replace(/\b(DRDP|FOMO|PAS\/PAP|FAB|CTA)\b/g, '');
+  // ANTI-LEAK concepts internes: strip les termes psycho/système qui doivent jamais arriver au prospect
+  r = r.replace(/\b(encre|récipient|System 1|System 2|dopamine|boucle cognitive|ancrage cognitif|biais cognitif|dissonance cognitive|Kahneman)\b/gi, '');
   r = r.replace(/#\d+\s*:/g, '');
   r = r.replace(/\b(système|system)\s*(prompt|instruction|directive|rule|règle)/gi, '');
   r = r.replace(/\n\n+/g, '\n').replace(/\n/g, ' ').trim().replace(/^\s*[-\u2022]\s*/gm, '');
@@ -849,6 +858,8 @@ INTERDIT: affirmer des choses sur sa vie qu'il a pas dites, diagnostiquer/psycha
 1-2 phrases MAX. 1 BLOC. MAX ${maxChars} chars. ZÉRO ÉMOJI. Tu mets JAMAIS d'émoji. C'est un mec de 23 ans qui écrit, pas un community manager. Les rares exceptions (1 max tous les 10 messages): uniquement pour renforcer un moment fort, genre quand tu envoies un lien ou que tu félicites. Sinon = ZÉRO. "Adam" INTERDIT. ${salamRule} JAMAIS de prix.
 ✏️ PONCTUATION NATURELLE: ÉVITE les points en fin de phrase. Un mec de 23 ans en DM il met PAS de point à la fin. Il écrit "je capte" pas "Je capte." Les points ça fait scolaire, trop appliqué, pas naturel. Les seules ponctuations autorisées: ? (questions) et parfois ! (énergie). Le reste = rien, juste le message brut comme sur un tel.
 🗣️ FRÉROT MODÉRÉ: "frérot" c'est cool mais PAS à chaque message. Maximum 1 frérot tous les 4-5 messages. Varie: parfois "frérot", parfois rien, parfois "mon gars", parfois juste tu parles direct sans appellation. Si t'as déjà dit frérot dans les 3 derniers messages → INTERDIT d'en remettre un.
+🔀 VARIATION OUVERTURE OBLIGATOIRE: JAMAIS commencer 2 messages de suite par le même mot ou la même tournure. Si t'as commencé par "Yo" → commence autrement. Si t'as fait "T'es en train de me dire" → fais AUTRE CHOSE. Regarde le PREMIER MOT de chaque msg dans ⛔ DÉJÀ DIT et commence par un mot DIFFÉRENT à chaque fois. Exemples de variations: commencer par une reformulation de ses mots, par une question directe, par un constat court, par un "Attends" ou "Genre" ou "Ah" — mais JAMAIS le même 2 fois. Le prospect doit sentir un HUMAIN qui improvise, PAS un robot qui boucle.
+🧠 TERMES INTERNES INTERDITS DANS LE MESSAGE: JAMAIS utiliser les mots "encre", "récipient", "System 1", "dopamine", "boucle cognitive", "ancrage" ou tout concept psycho technique. Tu parles comme un MEC, pas comme un bouquin de psycho. Si tu veux exprimer une idée psycho → traduis-la en langage de la rue.
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_VALEUR}. ⛔ INTERDIT: landing page et Calendly (PAS ENCORE).` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_LANDING}. ⛔ INTERDIT: Calendly (LANDING D'ABORD).` : `LIEN AUTORISÉ: ${CALENDLY_LINK}. Les autres liens ont déjà été envoyés.`}
 
 ${pending.hasPending ? `\n⏸️ PATIENCE: Ta dernière question "${pending.question.substring(0, 80)}" est ENCORE EN ATTENTE (${pending.turnsWaiting} msg depuis). ${pending.turnsWaiting >= 2 ? 'ABANDONNE cette question, passe à autre chose.' : 'NE LA REPOSE PAS. Réponds à ce qu\'il dit MAINTENANT. Laisse-lui le temps. Il reviendra dessus quand il sera prêt. Si tu reposes la même question → il va se sentir harcelé.'}` : ''}
