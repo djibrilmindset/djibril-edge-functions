@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V65 — DEBOUNCE + GROUPEMENT MESSAGES + EMPATHIE PELLABÈRE ===
+// === V66 — MISTRAL LARGE + DEBOUNCE + GROUPEMENT MESSAGES + EMPATHIE PELLABÈRE ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -12,11 +12,11 @@ const BOT_RESPONSE_FIELD_ID = 14462726;
 const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
-const MODEL = 'claude-opus-4-6';
+const MODEL = 'mistral-large-latest';
 const MAX_TOKENS = 120;
 const DEBOUNCE_MS = 10000; // 10 seconds for message grouping (prospects fragmentent souvent sur 8-12s)
 
-let _claudeKey: string | null = null;
+let _mistralKey: string | null = null;
 let _mcKey: string | null = null;
 let _keysFetchedAt = 0;
 const KEY_TTL = 5 * 60 * 1000;
@@ -24,11 +24,17 @@ let _techniquesCache: Record<string, any[]> = {};
 let _techniquesFetchedAt = 0;
 const TECH_TTL = 10 * 60 * 1000;
 
-async function getClaudeKey(): Promise<string | null> {
-  if (_claudeKey && Date.now() - _keysFetchedAt < KEY_TTL) return _claudeKey;
-  const { data } = await supabase.rpc('get_claude_api_key');
-  _claudeKey = data; _keysFetchedAt = Date.now();
-  return _claudeKey;
+async function getMistralKey(): Promise<string | null> {
+  if (_mistralKey && Date.now() - _keysFetchedAt < KEY_TTL) return _mistralKey;
+  // Essayer de récupérer depuis la DB d'abord, sinon fallback hardcodé
+  try {
+    const { data } = await supabase.rpc('get_mistral_api_key');
+    if (data) { _mistralKey = data; _keysFetchedAt = Date.now(); return _mistralKey; }
+  } catch {}
+  // Fallback: clé directe
+  _mistralKey = 'z9Ikvjdr0f65Fq5axFheKwdCOiyUJXti';
+  _keysFetchedAt = Date.now();
+  return _mistralKey;
 }
 async function getMcKey(): Promise<string | null> {
   if (_mcKey && Date.now() - _keysFetchedAt < KEY_TTL) return _mcKey;
@@ -618,7 +624,7 @@ function clean(text: string): string {
   r = r.replace(/je n.?ai pas (accès|la capacité|la possibilité).{0,40}(image|photo|instagram|vidéo|écran|voir)/gi, '');
   r = r.replace(/en tant qu.?(ia|intelligence|bot|assistant|programme|machine)/gi, '');
   r = r.replace(/je suis (un |une )?(ia|intelligence artificielle|bot|chatbot|assistant|programme|machine)/gi, '');
-  r = r.replace(/\b(language model|LLM|GPT|Claude|OpenAI|Anthropic|modèle de langage)\b/gi, '');
+  r = r.replace(/\b(language model|LLM|GPT|Claude|OpenAI|Anthropic|Mistral|modèle de langage)\b/gi, '');
   // ANTI-TEMPLATE: supprimer toute variable ManyChat/template {{...}} qui leak
   r = r.replace(/\{\{[^}]*\}\}/g, '').replace(/\{%[^%]*%\}/g, '');
   // ANTI-EMOJI: strip TOUS les émojis — Djibril parle comme un mec, pas un CM
@@ -891,7 +897,7 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory):
 }
 
 async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile, isOutbound: boolean = false): Promise<string> {
-  const key = await getClaudeKey();
+  const key = await getMistralKey();
   if (!key) return 'Souci technique frérot. Réessaie dans 2 min.';
   const isDistress = isDistressOrStuck === true && detectDistress(msg, history);
   const phaseResult = getPhase(history, msg, isDistress, mem, isOutbound);
@@ -918,14 +924,16 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
     let retryHint = '';
     if (attempt > 0) retryHint = `\n\n⚠️ TENTATIVE ${attempt + 1}: TA RÉPONSE PRÉCÉDENTE ÉTAIT TROP SIMILAIRE À UN MSG DÉJÀ ENVOYÉ. Tu DOIS changer: 1) les MOTS 2) la STRUCTURE 3) l'IDÉE/ANGLE. Si t'as posé une question avant → cette fois VALIDE ou REFORMULE. Si t'as parlé de blocage → parle d'AUTRE CHOSE. TOTALEMENT DIFFÉRENT.`;
     try {
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
+      // MISTRAL API: system prompt = premier message role "system", puis les messages user/assistant
+      const mistralMessages = [{ role: 'system', content: sys + retryHint }, ...messages];
+      const r = await fetch('https://api.mistral.ai/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: MODEL, max_tokens: tokens, temperature: temp, system: sys + retryHint, messages })
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+        body: JSON.stringify({ model: MODEL, max_tokens: tokens, temperature: temp, messages: mistralMessages })
       });
       const result = await r.json();
-      if (result.content?.[0]?.text) {
-        const raw = result.content[0].text;
+      if (result.choices?.[0]?.message?.content) {
+        const raw = result.choices[0].message.content;
         // ANTI-SELF-TALK: si Claude a sorti son raisonnement interne, retry avec hint
         if (isSelfTalk(raw)) {
           console.log(`[V65] 🚨 SELF-TALK DÉTECTÉ attempt ${attempt + 1}: "${raw.substring(0, 80)}"`);
