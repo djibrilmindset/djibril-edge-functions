@@ -1177,7 +1177,21 @@ export default async function handler(req: Request): Promise<Response> {
       || (userMessage && /\.ogg|\.m4a|\.opus|\.mp3|audio_clip|voice_message|vocal/i.test(userMessage)));
 
     // === V68: EXTRACTION + TRAITEMENT MÉDIA (Pixtral / Whisper) ===
-    const media = extractMediaUrl(body);
+    let media = extractMediaUrl(body);
+    // FIX: ManyChat envoie les vocaux comme URL lookaside.fbsbx.com — même pattern que les images
+    // Si isVoiceMessage est détecté par le body mais extractMediaUrl a dit "image" → forcer en audio
+    if (isVoiceMessage && media.url && media.type !== 'audio') {
+      console.log(`[V68] 🔄 Override: isVoiceMessage=true mais extractMediaUrl dit "${media.type}" → forcé en audio`);
+      media = { type: 'audio', url: media.url };
+    }
+    // Si isVoiceMessage est true mais extractMediaUrl n'a pas trouvé d'URL → extraire depuis le message
+    if (isVoiceMessage && !media.url && userMessage) {
+      const urlMatch = userMessage.match(/(https?:\/\/[^\s]+)/i);
+      if (urlMatch) {
+        console.log(`[V68] 🔄 Extraction URL audio depuis userMessage: ${urlMatch[1].substring(0, 60)}`);
+        media = { type: 'audio', url: urlMatch[1] };
+      }
+    }
     let mediaProcessedText: string | null = null;
     let mediaContext: string | null = null;
     if (media.type === 'audio' && media.url) {
@@ -1187,7 +1201,7 @@ export default async function handler(req: Request): Promise<Response> {
         mediaContext = `[Le prospect a envoyé un MESSAGE VOCAL. Transcription: "${mediaProcessedText}"]\nRéponds comme si tu avais ÉCOUTÉ son vocal. JAMAIS mentionner "transcription", "vocal", "audio". Tu l'as ENTENDU, point.`;
         console.log(`[V68] ✅ Vocal transcrit: "${mediaProcessedText.substring(0, 80)}"`);
       }
-    } else if (media.type === 'image' && media.url) {
+    } else if (media.type === 'image' && media.url && !isVoiceMessage) {
       console.log(`[V68] 📸 Image détectée: ${media.url.substring(0, 80)}`);
       const imageDesc = await describeImage(media.url);
       if (imageDesc) {
@@ -1294,7 +1308,22 @@ export default async function handler(req: Request): Promise<Response> {
     const combinedMsg = pendingMessages.join(' — ');
     console.log(`[V65] COMBINING ${pendingMessages.length} pending message(s) → "${combinedMsg.substring(0, 80)}..."`);
 
-    const msg = combinedMsg.replace(/\s*[\u2014\u2013]\s*/g, ', ').replace(/\s*-{2,}\s*/g, ', ');
+    let msg = combinedMsg.replace(/\s*[\u2014\u2013]\s*/g, ', ').replace(/\s*-{2,}\s*/g, ', ');
+    // V68: Si on a une transcription audio, remplacer l'URL brute par la transcription dans msg
+    if (media.type === 'audio' && mediaProcessedText) {
+      // Le msg peut contenir "[🎤 Vocal] transcription" (depuis savePending) ou l'URL brute
+      msg = msg.replace(/https?:\/\/lookaside\.fbsbx\.com[^\s]*/gi, '').trim();
+      if (!msg || msg === '[🎤 Vocal]') msg = mediaProcessedText;
+      // Si le msg commence par [🎤 Vocal], extraire le texte après
+      if (msg.startsWith('[🎤 Vocal]')) msg = msg.replace('[🎤 Vocal]', '').trim();
+      console.log(`[V68] 🎤 msg audio nettoyé: "${msg.substring(0, 80)}"`);
+    }
+    // V68: Si on a une description d'image, enrichir le msg
+    if (media.type === 'image' && mediaProcessedText) {
+      msg = msg.replace(/https?:\/\/lookaside\.fbsbx\.com[^\s]*/gi, '').replace(/https?:\/\/scontent[^\s]*/gi, '').trim();
+      if (!msg || msg.startsWith('[📸 Image:')) msg = `[Le prospect a envoyé une image: ${mediaProcessedText}]`;
+      console.log(`[V68] 📸 msg image nettoyé: "${msg.substring(0, 80)}"`);
+    }
     const mem = extractKnownInfo(history);
     const isDistress = detectDistress(msg, history);
 
