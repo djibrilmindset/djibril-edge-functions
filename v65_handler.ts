@@ -98,8 +98,8 @@ async function setField(subscriberId: string, text: string): Promise<void> {
 async function getHistory(platform: string, userId: string): Promise<any[]> {
   try {
     const { data } = await supabase.from('conversation_history').select('user_message, bot_response, created_at').eq('platform', platform).eq('user_id', userId).order('created_at', { ascending: false }).limit(25);
-    // Filter out __PENDING__ responses from history (only use complete exchanges)
-    const filtered = (data || []).filter((h: any) => h.bot_response !== '__PENDING__').reverse();
+    // Filter out __PENDING__ and __ADMIN_TAKEOVER__ responses from history (only use complete exchanges)
+    const filtered = (data || []).filter((h: any) => h.bot_response !== '__PENDING__' && h.bot_response !== '__ADMIN_TAKEOVER__').reverse();
     return filtered;
   } catch { return []; }
 }
@@ -637,11 +637,11 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
       maxChars = 120;
       break;
     case 'EXPLORER':
-      phaseInstr = `VOIR (Pellabère) — Décris ce que tu perçois de sa situation en 1 phrase courte. Puis UNE question PRÉCISE sur CE QU'IL VIT avec JUSTIFICATION: "Je te demande ça parce que [raison liée à LUI]". ZÉRO question d'âge/métier/budget ici — c'est trop tôt. Focus 100% sur son VÉCU et ses ÉMOTIONS.`;
+      phaseInstr = `VOIR (Pellabère) — Décris ce que tu perçois de sa situation en 1 phrase courte. Puis UNE question INTRINSÈQUE (pas "pourquoi?" mais "qu'est-ce qui fait que...?"). Ex: "Qu'est-ce qui fait que t'en es là aujourd'hui ?" / "C'est quoi le truc qui te bloque le plus ?". JUSTIFICATION: "Je te demande ça parce que [raison liée à LUI]". ZÉRO question d'âge/métier/budget ici — c'est trop tôt. Focus 100% sur son VÉCU et ses ÉMOTIONS.`;
       maxChars = 180;
       break;
     case 'CREUSER':
-      phaseInstr = `NOMMER AVEC HUMILITÉ — Formule TOUJOURS en hypothèse/question: "On dirait que... je me trompe ?" / "J'ai l'impression que derrière tout ça y'a... c'est ça ?". JAMAIS affirmer. Puis creuse le COÛT: "Et ça te coûte quoi au quotidien ?". Justifie: "je creuse parce que c'est là que se cache le vrai truc". Base-toi UNIQUEMENT sur ce qu'il a DIT, pas sur ce que tu imagines.`;
+      phaseInstr = `NOMMER + QUESTIONS INTRINSÈQUES (Pellabère) — Formule TOUJOURS en hypothèse: "On dirait que... je me trompe ?". Puis CREUSE avec des questions qui le font se CONFRONTER à lui-même: "Et si tu changes rien, dans 6 mois t'en es où ?" / "Qu'est-ce que tu y gagnes à rester comme ça ?" / "Si demain t'avais la solution, ça changerait quoi concrètement pour toi ?". Le but = LUI fait découvrir SA propre réponse, toi tu guides avec des questions, tu donnes JAMAIS la réponse. Justifie: "je te pose cette question parce que [raison précise]". Base-toi UNIQUEMENT sur ce qu'il a DIT.`;
       maxChars = 200;
       break;
     case 'RÉVÉLER':
@@ -657,7 +657,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
       maxChars = 180;
       break;
     case 'QUALIFIER':
-      phaseInstr = `Questionnement LearnErra adapté DM — creuse avec empathie: "C'est quoi ton objectif concret ?", "Qu'est-ce que tu veux être CAPABLE de faire par toi-même ?", "Qu'est-ce que t'as déjà essayé ?", "Qu'est-ce qui a pas marché ?". Chaque question JUSTIFIÉE: "je te demande parce que [raison]". ANGLE: le prospect veut pas juste de l'argent — il veut le MENTAL et la capacité de se suffire à lui-même, de devenir un vrai entrepreneur autonome. Oriente les questions vers ça. Vérifie budget INDIRECTEMENT: "t'as déjà investi dans quelque chose pour avancer ?" / "t'es prêt à mettre les moyens pour que ça change ?". JAMAIS de montant. JAMAIS de prix.`;
+      phaseInstr = `QUESTIONS INTRINSÈQUES (Pellabère + LearnErra) — Tu GUIDES, tu donnes JAMAIS la réponse. Le prospect doit DÉCOUVRIR par lui-même ce qu'il veut vraiment. Style négociation: "C'est quoi pour toi réussir, concrètement ?" / "Si dans 80 jours t'avais exactement ce que tu veux, ça ressemble à quoi ta vie ?" / "Qu'est-ce que t'as déjà essayé et pourquoi ça a pas marché ?" / "Qu'est-ce qui fait que t'es encore dans cette situation aujourd'hui ?". Confronte DOUCEMENT: "Tu me dis que tu veux X, mais qu'est-ce qui t'empêche de commencer maintenant ?". ANGLE: il veut pas juste de l'argent — il veut le MENTAL et la capacité de se suffire à lui-même. Oriente vers ça. Budget INDIRECT: "t'as déjà mis de l'argent dans quelque chose pour avancer ?" / "t'es prêt à investir pour que ça change ?". Chaque question JUSTIFIÉE: "je te demande ça parce que [raison précise liée à ce qu'il a dit]". JAMAIS de montant. JAMAIS de prix.`;
       maxChars = 200;
       break;
     case 'ENVOYER_LANDING':
@@ -694,7 +694,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
 #3: JUSTIFIE CHAQUE QUESTION — "parce que..." / "je te demande ça parce que..." (Cialdini). Ça neutralise le scepticisme.
 #4: NOMME AVEC HUMILITÉ — Affect labeling (Voss) mais TOUJOURS sous forme de question ou d'hypothèse. "On dirait que..?" / "J'ai l'impression que... je me trompe ?". JAMAIS de diagnostic. T'es un grand frère, pas un psy.
 #5: ZÉRO NEEDINESS — Tu proposes, tu forces JAMAIS (Camp). Détachement = autorité.
-#6: FAIS-LE PARLER — Questions ouvertes. Lui parle plus que toi.
+#6: FAIS-LE PARLER (Pellabère) — Questions INTRINSÈQUES: pas "pourquoi ?" mais "qu'est-ce qui fait que... ?" / "si tu obtiens ça, ça change quoi ?". Lui parle plus que toi. Tu GUIDES vers la réponse, tu la donnes JAMAIS. Il doit se convaincre LUI-MÊME.
 #7: JAMAIS RÉPÉTER — Chaque msg = angle, mot, structure et IDÉE complètement NOUVEAUX. Relis les ⛔ DÉJÀ DIT et change TOUT: les mots, la structure, l'angle, le sujet. Si t'as déjà parlé de blocage → parle d'autre chose. Si t'as posé une question → cette fois valide/reformule.
 #8: JAMAIS REDEMANDER — Si tu sais déjà une info (voir 🧠 TU SAIS DÉJÀ), UTILISE-LA.
 #9: QUALIFICATION TARDIVE — JAMAIS demander âge, métier ou budget dans les premiers échanges. D'abord tu CONNECTES.
@@ -879,8 +879,52 @@ export async function handler(req: Request): Promise<Response> {
     const isVoiceMessage = !!(body.attachment_type === 'audio' || body.type === 'audio' || body.media_type === 'audio'
       || body.attachments?.some?.((a: any) => a.type === 'audio' || /audio|voice|vocal|\.ogg|\.m4a|\.opus|\.mp3/i.test(a.url || a.payload?.url || ''))
       || (userMessage && /\.ogg|\.m4a|\.opus|\.mp3|audio_clip|voice_message|vocal/i.test(userMessage)));
-    console.log(`[V65] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage })}`);
+    // DÉTECTION LIVE CHAT / INTERVENTION MANUELLE
+    const isLiveChat = !!(body.live_chat || body.is_live_chat || body.live_chat_active || body.operator_id || body.agent_id
+      || body.custom_fields?.live_chat || body.custom_fields?.bot_paused
+      || (body.source && body.source !== 'automation' && body.source !== 'flow'));
+    console.log(`[V65] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, liveChat: isLiveChat })}`);
     if (!userId || !userMessage) return mcRes('Envoie-moi un message frérot.');
+
+    // COMMANDES ADMIN: //pause et //resume (envoyées manuellement par Djibril)
+    if (userMessage.trim().toLowerCase().startsWith('//pause')) {
+      console.log(`[V65] 🛑 ADMIN PAUSE command pour ${userId}`);
+      await supabase.from('conversation_history').insert({ platform, user_id: userId, user_message: '//pause', bot_response: '__ADMIN_TAKEOVER__', created_at: new Date().toISOString() });
+      return mcEmpty();
+    }
+    if (userMessage.trim().toLowerCase().startsWith('//resume') || userMessage.trim().toLowerCase().startsWith('//reprise')) {
+      console.log(`[V65] ✅ ADMIN RESUME command pour ${userId}`);
+      await supabase.from('conversation_history').delete().eq('user_id', userId).eq('bot_response', '__ADMIN_TAKEOVER__');
+      return mcEmpty();
+    }
+
+    // Si ManyChat signale que le Live Chat est actif (admin intervient) → bot se retire
+    if (isLiveChat) {
+      console.log(`[V65] 🛑 LIVE CHAT DÉTECTÉ — bot en pause pour ${userId}`);
+      // Sauvegarder un marqueur dans la conversation pour ne pas répondre
+      await supabase.from('conversation_history').insert({ platform, user_id: userId, user_message: userMessage, bot_response: '__ADMIN_TAKEOVER__', created_at: new Date().toISOString() });
+      return mcEmpty();
+    }
+
+    // Vérifier si un admin a pris le relais récemment (dans les 2 dernières heures)
+    const { data: adminCheck } = await supabase.from('conversation_history')
+      .select('created_at')
+      .eq('user_id', userId)
+      .eq('bot_response', '__ADMIN_TAKEOVER__')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (adminCheck && adminCheck.length > 0) {
+      const takeoverTime = new Date(adminCheck[0].created_at).getTime();
+      const hoursSince = (Date.now() - takeoverTime) / (1000 * 60 * 60);
+      if (hoursSince < 2) {
+        console.log(`[V65] 🛑 ADMIN TAKEOVER actif (${hoursSince.toFixed(1)}h ago) — bot en pause pour ${userId}`);
+        return mcEmpty();
+      } else {
+        // Takeover expiré, supprimer le marqueur pour reprendre le bot
+        await supabase.from('conversation_history').delete().eq('user_id', userId).eq('bot_response', '__ADMIN_TAKEOVER__');
+        console.log(`[V65] ✅ ADMIN TAKEOVER expiré — bot reprend pour ${userId}`);
+      }
+    }
 
     // === V65 DEBOUNCE MECHANISM ===
     const pendingSave = await savePending(platform, userId, userMessage);
