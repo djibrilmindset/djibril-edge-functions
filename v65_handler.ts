@@ -663,6 +663,11 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   const recentBot = history.slice(-6).filter(h => h.bot_response).map(h => h.bot_response);
   const userSummary = recentUser.length ? '\nDERNIERS MSGS: ' + recentUser.join(' | ') : '';
   const botBans = recentBot.length ? '\n⛔ DÉJÀ DIT (INTERDIT de redire — ni les mots, ni l\'idée, ni la structure): ' + recentBot.map((r, i) => `[${i+1}] "${(r || '').substring(0, 100)}"`).join(' | ') : '';
+  // DÉTECTION POST-DEFLECT: si le dernier msg bot était un deflect média, le prospect vient de réécrire en texte
+  const mediaDeflectPhrases = ['bug un peu', 'souci d\'affichage', 'charge pas', 'tel déconne', 'veut pas s\'ouvrir', 'en déplacement', 'co qui rame', 'passe pas sur mon tel', 'appli bug', 'arrive pas à ouvrir'];
+  const lastBotMsg = (recentBot[recentBot.length - 1] || '').toLowerCase();
+  const wasMediaDeflect = mediaDeflectPhrases.some(p => lastBotMsg.includes(p));
+  const postDeflectBlock = wasMediaDeflect ? '\n🔄 ATTENTION POST-DEFLECT: Ta dernière réponse était un "problème technique". Le prospect vient de RÉÉCRIRE son message en texte. Ce message est du contenu NEUF — traite-le comme tel. Tu dois AVANCER la conversation. INTERDIT de répéter ce que tu avais dit AVANT le problème technique. Dis quelque chose de COMPLÈTEMENT NOUVEAU qui rebondit sur ce qu\'il vient d\'écrire.' : '';
   const techBlock = getTechniquesForPhase(phase);
   const concepts = detectUsedConcepts(history);
   const conceptBans = buildConceptBans(concepts);
@@ -807,7 +812,7 @@ INTERDIT: affirmer des choses sur sa vie qu'il a pas dites, diagnostiquer/psycha
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_VALEUR}. ⛔ INTERDIT: landing page et Calendly (PAS ENCORE).` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_LANDING}. ⛔ INTERDIT: Calendly (LANDING D'ABORD).` : `LIEN AUTORISÉ: ${CALENDLY_LINK}. Les autres liens ont déjà été envoyés.`}
 
 ${pending.hasPending ? `\n⏸️ PATIENCE: Ta dernière question "${pending.question.substring(0, 80)}" est ENCORE EN ATTENTE (${pending.turnsWaiting} msg depuis). ${pending.turnsWaiting >= 2 ? 'ABANDONNE cette question, passe à autre chose.' : 'NE LA REPOSE PAS. Réponds à ce qu\'il dit MAINTENANT. Laisse-lui le temps. Il reviendra dessus quand il sera prêt. Si tu reposes la même question → il va se sentir harcelé.'}` : ''}
-${phase} | Trust ${trust}/10 | #${n+1} | ${funnel.funnelStep} | ${qual}
+${phase} | Trust ${trust}/10 | #${n+1} | ${funnel.funnelStep} | ${qual}${postDeflectBlock}
 ${phaseInstr}${botBans}`;
 }
 
