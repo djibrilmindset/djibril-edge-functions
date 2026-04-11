@@ -103,7 +103,7 @@ async function setField(subscriberId: string, text: string): Promise<void> {
 
 async function getHistory(platform: string, userId: string): Promise<any[]> {
   try {
-    const { data } = await supabase.from('conversation_history').select('user_message, bot_response, created_at').eq('platform', platform).eq('user_id', userId).order('created_at', { ascending: false }).limit(25);
+    const { data } = await supabase.from('conversation_history').select('user_message, bot_response, created_at').eq('platform', platform).eq('user_id', userId).order('created_at', { ascending: false }).limit(100);
     // Filter out __PENDING__, __ADMIN_TAKEOVER__ and __OUTBOUND__ responses from history (only use complete exchanges)
     const filtered = (data || []).filter((h: any) => h.bot_response !== '__PENDING__' && h.bot_response !== '__ADMIN_TAKEOVER__' && h.bot_response !== '__OUTBOUND__').reverse();
     return filtered;
@@ -690,9 +690,15 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   const salamDone = hasSalamBeenSaid(history);
   const salamRule = salamDone ? 'JAMAIS Salam (DÉJÀ DIT).' : (n === 0 ? 'Salam OK (1er msg).' : 'JAMAIS Salam.');
   const recentUser = history.slice(-5).filter(h => h.user_message).map((h, i) => `[${i+1}] ${(h.user_message || '').substring(0, 80)}`);
-  const recentBot = history.slice(-10).filter(h => h.bot_response).map(h => h.bot_response);
+  // DÉJÀ DIT: on charge TOUS les messages bot de la conversation pour le prompt (tronqué)
+  // + on garde les 10 derniers en détail pour le bloc ⛔
+  const allBotMsgs = history.filter(h => h.bot_response).map(h => h.bot_response);
+  const recentBot = allBotMsgs.slice(-10);
   const userSummary = recentUser.length ? '\nDERNIERS MSGS: ' + recentUser.join(' | ') : '';
   const botBans = recentBot.length ? '\n⛔ DÉJÀ DIT (INTERDIT de redire — ni les mots, ni l\'idée, ni la structure): ' + recentBot.map((r, i) => `[${i+1}] "${(r || '').substring(0, 100)}"`).join(' | ') : '';
+  // HISTORIQUE COMPLET: résumer les anciens messages (avant les 10 derniers) pour que Mistral ne répète RIEN de toute la conv
+  const olderBotMsgs = allBotMsgs.slice(0, -10);
+  const olderBotBans = olderBotMsgs.length > 0 ? '\n⛔ HISTORIQUE ANCIEN (aussi INTERDIT à redire): ' + olderBotMsgs.map(r => `"${(r || '').substring(0, 50)}"`).join(' | ') : '';
   // DÉTECTION POST-DEFLECT: si le dernier msg bot était un deflect média, le prospect vient de réécrire en texte
   const mediaDeflectPhrases = ['bug un peu', 'souci d\'affichage', 'charge pas', 'tel déconne', 'veut pas s\'ouvrir', 'en déplacement', 'co qui rame', 'passe pas sur mon tel', 'appli bug', 'arrive pas à ouvrir'];
   const lastBotMsg = (recentBot[recentBot.length - 1] || '').toLowerCase();
@@ -847,7 +853,7 @@ ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_VALEU
 
 ${pending.hasPending ? `\n⏸️ PATIENCE: Ta dernière question "${pending.question.substring(0, 80)}" est ENCORE EN ATTENTE (${pending.turnsWaiting} msg depuis). ${pending.turnsWaiting >= 2 ? 'ABANDONNE cette question, passe à autre chose.' : 'NE LA REPOSE PAS. Réponds à ce qu\'il dit MAINTENANT. Laisse-lui le temps. Il reviendra dessus quand il sera prêt. Si tu reposes la même question → il va se sentir harcelé.'}` : ''}
 ${phase} | Trust ${trust}/10 | #${n+1} | ${funnel.funnelStep} | ${qual}${postDeflectBlock}
-${phaseInstr}${botBans}`;
+${phaseInstr}${botBans}${olderBotBans}`;
 }
 
 function detectHallucination(history: any[], mem: ProspectMemory): { detected: boolean; details: string[] } {
@@ -906,7 +912,7 @@ function buildTruthReminder(mem: ProspectMemory): string | null {
 
 function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory): any[] {
   const msgs: any[] = [];
-  for (const h of history.slice(-12)) {
+  for (const h of history.slice(-20)) {
     if (h.user_message) msgs.push({ role: 'user', content: h.user_message });
     if (h.bot_response) msgs.push({ role: 'assistant', content: h.bot_response });
   }
@@ -932,7 +938,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   const memoryBlock = formatMemoryBlock(mem);
   let sys = buildPrompt(history, phaseResult, memoryBlock, profile);
   // Si spirale détectée, injecter un RESET dans le prompt
-  const recentResponses = history.slice(-10).map((h: any) => h.bot_response || '').filter(Boolean);
+  const recentResponses = history.map((h: any) => h.bot_response || '').filter(Boolean);
   const isStuck = recentResponses.length >= 3 && recentResponses.slice(-3).some((r, i, arr) => i > 0 && calculateSimilarity(r, arr[0]) > 0.3);
   if (isStuck) {
     sys += '\n\n🚨 ALERTE SPIRALE CRITIQUE: Tes dernières réponses se RÉPÈTENT. Le prospect voit que c\'est un robot. Tu DOIS: 1) Utiliser des MOTS COMPLÈTEMENT DIFFÉRENTS 2) Commencer ta phrase AUTREMENT (pas le même premier mot) 3) Changer de SUJET ou d\'ANGLE — si t\'as posé des questions, cette fois DONNE une info concrète. Si t\'as parlé de blocage, parle d\'ACTION. Si t\'as validé, cette fois CHALLENGE. RIEN ne doit ressembler aux messages précédents. CASSE LA BOUCLE MAINTENANT.';
@@ -1120,7 +1126,7 @@ export default async function handler(req: Request): Promise<Response> {
     const funnel = getFunnelState(history);
     // Forcer pattern vocal si détecté au body level (priorité sur image_link)
     const pattern = isVoiceMessage ? 'voice_message' : detectPattern(msg);
-    const recentBotMsgs = history.slice(-12).map((h: any) => h.bot_response || '').filter(Boolean);
+    const recentBotMsgs = history.map((h: any) => h.bot_response || '').filter(Boolean);
     // DÉTECTION SPIRALE: si parmi les 3 dernières réponses, 2+ se ressemblent → forcer Mistral avec reset
     const lastThree = recentBotMsgs.slice(-3);
     const isStuck = lastThree.length >= 3 && (
