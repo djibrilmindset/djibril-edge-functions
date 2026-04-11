@@ -111,10 +111,6 @@ async function getPendingMessages(platform: string, userId: string, afterTimesta
   } catch { return []; }
 }
 
-async function save(platform: string, userId: string, msg: string, response: string): Promise<void> {
-  try { await supabase.from('conversation_history').insert([{ platform, user_id: userId, user_message: msg, bot_response: response, created_at: new Date().toISOString() }]); } catch {}
-}
-
 async function savePending(platform: string, userId: string, msg: string): Promise<{ id?: string; created_at: string }> {
   try {
     const created_at = new Date().toISOString();
