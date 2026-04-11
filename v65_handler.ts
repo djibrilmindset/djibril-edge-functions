@@ -603,6 +603,9 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   const alreadyKnownBlock = buildAlreadyKnownBlock(mem, asked);
   const funnelStatus = `\nFUNNEL: Valeur ${funnel.valeurSent ? '✅' : '❌'} | Landing ${funnel.landingSent ? '✅' : '❌'} | Calendly ${funnel.calendlySent ? '✅' : '❌'} (ordre strict)`;
 
+  // DOULEUR MÉTIER → AUTONOMIE: quand on connaît son métier, creuser comment ce métier l'empêche d'être libre
+  const metierPainBlock = mem.metier ? `\n🎯 DOULEUR MÉTIER CONNUE: Il fait "${mem.metier}". CREUSE avec humilité comment CE MÉTIER PRÉCIS l'empêche d'être autonome. Questions intrinsèques adaptées: "Qu'est-ce qui fait que ${mem.metier} te laisse pas le temps de construire autre chose ?" / "Dans ${mem.metier}, c'est quoi le truc qui te bouffe le plus — le temps, l'énergie, ou la liberté ?" / "Si tu pouvais garder ce que t'aimes dans ${mem.metier} mais en étant libre financièrement et géographiquement, ça ressemblerait à quoi ?". CONNECTE toujours à l'AUTONOMIE: liberté de temps, liberté financière, liberté géographique. Le métier chronophage = le piège qui l'empêche de se suffire à lui-même. Mais HUMILITÉ: tu juges JAMAIS son métier, tu l'aides à VOIR par lui-même en quoi ça le bloque.` : '';
+
   // QUALIFICATION = seulement à partir de RÉVÉLER. Avant = pure connexion, ZÉRO question d'âge/budget/métier
   const earlyPhases = ['ACCUEIL', 'EXPLORER', 'CREUSER'];
   let qualBlock = '';
@@ -641,11 +644,11 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
       maxChars = 180;
       break;
     case 'CREUSER':
-      phaseInstr = `NOMMER + QUESTIONS INTRINSÈQUES (Pellabère) — Formule TOUJOURS en hypothèse: "On dirait que... je me trompe ?". Puis CREUSE avec des questions qui le font se CONFRONTER à lui-même: "Et si tu changes rien, dans 6 mois t'en es où ?" / "Qu'est-ce que tu y gagnes à rester comme ça ?" / "Si demain t'avais la solution, ça changerait quoi concrètement pour toi ?". Le but = LUI fait découvrir SA propre réponse, toi tu guides avec des questions, tu donnes JAMAIS la réponse. Justifie: "je te pose cette question parce que [raison précise]". Base-toi UNIQUEMENT sur ce qu'il a DIT.`;
+      phaseInstr = `NOMMER + QUESTIONS INTRINSÈQUES (Pellabère) — Formule TOUJOURS en hypothèse: "On dirait que... je me trompe ?". Puis CREUSE avec des questions qui le font se CONFRONTER à lui-même: "Et si tu changes rien, dans 6 mois t'en es où ?" / "Qu'est-ce que tu y gagnes à rester comme ça ?" / "Si demain t'avais la solution, ça changerait quoi concrètement pour toi ?". Le but = LUI fait découvrir SA propre réponse, toi tu guides avec des questions, tu donnes JAMAIS la réponse. Justifie: "je te pose cette question parce que [raison précise]". Base-toi UNIQUEMENT sur ce qu'il a DIT.${metierPainBlock}`;
       maxChars = 200;
       break;
     case 'RÉVÉLER':
-      phaseInstr = `PERMETTRE — Normalise: "T'es loin d'être le seul, y'a un truc qui explique ça". Propose UN mécanisme psycho en QUESTION: "Tu sais pourquoi ça bloque ? C'est ce qu'on appelle [concept — 1 seul, PAS un grillé]". JAMAIS diagnostiquer: tu PROPOSES une explication, tu l'imposes pas. Termine par une question qui ouvre.`;
+      phaseInstr = `PERMETTRE — Normalise: "T'es loin d'être le seul, y'a un truc qui explique ça". Propose UN mécanisme psycho en QUESTION: "Tu sais pourquoi ça bloque ? C'est ce qu'on appelle [concept — 1 seul, PAS un grillé]". JAMAIS diagnostiquer: tu PROPOSES une explication, tu l'imposes pas. Termine par une question qui ouvre.${metierPainBlock ? ' RELIE le mécanisme à SON MÉTIER: montre comment le piège cognitif se manifeste CONCRÈTEMENT dans son quotidien pro.' : ''}`;
       maxChars = 200;
       break;
     case 'PROPOSER_VALEUR':
@@ -657,7 +660,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
       maxChars = 180;
       break;
     case 'QUALIFIER':
-      phaseInstr = `QUESTIONS INTRINSÈQUES (Pellabère + LearnErra) — Tu GUIDES, tu donnes JAMAIS la réponse. Le prospect doit DÉCOUVRIR par lui-même ce qu'il veut vraiment. Style négociation: "C'est quoi pour toi réussir, concrètement ?" / "Si dans 80 jours t'avais exactement ce que tu veux, ça ressemble à quoi ta vie ?" / "Qu'est-ce que t'as déjà essayé et pourquoi ça a pas marché ?" / "Qu'est-ce qui fait que t'es encore dans cette situation aujourd'hui ?". Confronte DOUCEMENT: "Tu me dis que tu veux X, mais qu'est-ce qui t'empêche de commencer maintenant ?". ANGLE: il veut pas juste de l'argent — il veut le MENTAL et la capacité de se suffire à lui-même. Oriente vers ça. Budget INDIRECT: "t'as déjà mis de l'argent dans quelque chose pour avancer ?" / "t'es prêt à investir pour que ça change ?". Chaque question JUSTIFIÉE: "je te demande ça parce que [raison précise liée à ce qu'il a dit]". JAMAIS de montant. JAMAIS de prix.`;
+      phaseInstr = `QUESTIONS INTRINSÈQUES (Pellabère + LearnErra) — Tu GUIDES, tu donnes JAMAIS la réponse. Le prospect doit DÉCOUVRIR par lui-même ce qu'il veut vraiment. Style négociation: "C'est quoi pour toi réussir, concrètement ?" / "Si dans 80 jours t'avais exactement ce que tu veux, ça ressemble à quoi ta vie ?" / "Qu'est-ce que t'as déjà essayé et pourquoi ça a pas marché ?" / "Qu'est-ce qui fait que t'es encore dans cette situation aujourd'hui ?". Confronte DOUCEMENT: "Tu me dis que tu veux X, mais qu'est-ce qui t'empêche de commencer maintenant ?". ANGLE: il veut pas juste de l'argent — il veut le MENTAL et la capacité de se suffire à lui-même. Oriente vers ça. Budget INDIRECT: "t'as déjà mis de l'argent dans quelque chose pour avancer ?" / "t'es prêt à investir pour que ça change ?". Chaque question JUSTIFIÉE: "je te demande ça parce que [raison précise liée à ce qu'il a dit]". JAMAIS de montant. JAMAIS de prix.${metierPainBlock}`;
       maxChars = 200;
       break;
     case 'ENVOYER_LANDING':
