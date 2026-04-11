@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V67 — MISTRAL LARGE + AUDIT COMPLET PROMPT + ANTI-RÉPÉTITION TOTAL + DONNÉES VÉRIFIÉES ===
+// === V68 — V67 + PIXTRAL VISION (images) + WHISPER TRANSCRIPTION (vocaux) ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -13,10 +13,13 @@ const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
 const MODEL = 'mistral-large-latest';
+const PIXTRAL_MODEL = 'pixtral-large-latest';
+const WHISPER_MODEL = 'whisper-1';
 const MAX_TOKENS = 120;
 const DEBOUNCE_MS = 10000; // 10 seconds for message grouping (prospects fragmentent souvent sur 8-12s)
 
 let _mistralKey: string | null = null;
+let _openaiKey: string | null = null;
 let _mcKey: string | null = null;
 let _keysFetchedAt = 0;
 const KEY_TTL = 5 * 60 * 1000;
@@ -36,10 +39,112 @@ async function getMistralKey(): Promise<string | null> {
   _keysFetchedAt = Date.now();
   return _mistralKey;
 }
+async function getOpenAIKey(): Promise<string | null> {
+  if (_openaiKey && Date.now() - _keysFetchedAt < KEY_TTL) return _openaiKey;
+  try {
+    const { data } = await supabase.rpc('get_openai_api_key');
+    if (data) { _openaiKey = data; return _openaiKey; }
+  } catch {}
+  return null;
+}
+
 async function getMcKey(): Promise<string | null> {
   if (_mcKey && Date.now() - _keysFetchedAt < KEY_TTL) return _mcKey;
   const { data } = await supabase.rpc('get_manychat_api_key');
   _mcKey = data; return _mcKey;
+}
+
+// === MEDIA PROCESSING: PIXTRAL (images) + WHISPER (audio) ===
+
+function extractMediaUrl(body: any): { type: 'image' | 'audio' | null; url: string | null } {
+  // 1. Chercher dans attachments (format ManyChat standard)
+  if (body.attachments && Array.isArray(body.attachments)) {
+    for (const att of body.attachments) {
+      const url = att.url || att.payload?.url || att.file_url || '';
+      const type = att.type || att.media_type || '';
+      if (/audio|voice|vocal/i.test(type) || /\.ogg|\.m4a|\.opus|\.mp3|\.wav|\.aac/i.test(url)) {
+        return { type: 'audio', url };
+      }
+      if (/image|photo/i.test(type) || /\.jpg|\.jpeg|\.png|\.gif|\.webp/i.test(url) || /scontent|fbcdn|lookaside\.fbsbx/i.test(url)) {
+        return { type: 'image', url };
+      }
+    }
+  }
+  // 2. Chercher dans le body direct
+  if (body.attachment_url || body.media_url || body.file_url) {
+    const url = body.attachment_url || body.media_url || body.file_url;
+    if (/\.ogg|\.m4a|\.opus|\.mp3|\.wav|\.aac|audio/i.test(url)) return { type: 'audio', url };
+    if (/\.jpg|\.jpeg|\.png|\.gif|\.webp|scontent|fbcdn|lookaside/i.test(url)) return { type: 'image', url };
+  }
+  // 3. Extraire URL depuis le message texte
+  const msg = body.message || body.last_input_text || body.text || '';
+  const urlMatch = msg.match(/(https?:\/\/[^\s]+\.(ogg|m4a|opus|mp3|wav|aac))/i);
+  if (urlMatch) return { type: 'audio', url: urlMatch[1] };
+  const imgMatch = msg.match(/(https?:\/\/[^\s]+(\.jpg|\.jpeg|\.png|\.gif|\.webp|scontent[^\s]*|fbcdn[^\s]*|lookaside\.fbsbx[^\s]*))/i);
+  if (imgMatch) return { type: 'image', url: imgMatch[1] };
+  return { type: null, url: null };
+}
+
+async function transcribeAudio(audioUrl: string): Promise<string | null> {
+  const openaiKey = await getOpenAIKey();
+  if (!openaiKey) {
+    console.log('[V68] ⚠️ Pas de clé OpenAI — transcription audio impossible');
+    return null;
+  }
+  try {
+    // Télécharger le fichier audio
+    const audioResponse = await fetch(audioUrl);
+    if (!audioResponse.ok) { console.log(`[V68] Audio fetch failed: ${audioResponse.status}`); return null; }
+    const audioBlob = await audioResponse.blob();
+    // Envoyer à Whisper
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'audio.ogg');
+    formData.append('model', WHISPER_MODEL);
+    formData.append('language', 'fr');
+    formData.append('response_format', 'text');
+    const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${openaiKey}` },
+      body: formData,
+    });
+    if (!whisperResponse.ok) { console.log(`[V68] Whisper error: ${whisperResponse.status}`); return null; }
+    const transcription = (await whisperResponse.text()).trim();
+    console.log(`[V68] 🎤 Whisper transcription: "${transcription.substring(0, 100)}"`);
+    return transcription || null;
+  } catch (e: any) {
+    console.error('[V68] transcribeAudio error:', e.message);
+    return null;
+  }
+}
+
+async function describeImage(imageUrl: string): Promise<string | null> {
+  const mistralKey = await getMistralKey();
+  if (!mistralKey) return null;
+  try {
+    const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${mistralKey}` },
+      body: JSON.stringify({
+        model: PIXTRAL_MODEL,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Décris cette image en 1-2 phrases courtes en français. Contexte: un prospect Instagram envoie cette image dans une conversation DM. Dis ce que tu vois de façon factuelle et concise. Si c\'est un screenshot de texte, transcris le texte.' },
+            { type: 'image_url', image_url: { url: imageUrl } }
+          ]
+        }],
+        max_tokens: 200,
+      }),
+    });
+    if (!response.ok) { console.log(`[V68] Pixtral error: ${response.status}`); return null; }
+    const data = await response.json();
+    const description = data.choices?.[0]?.message?.content?.trim();
+    console.log(`[V68] 📸 Pixtral description: "${(description || '').substring(0, 100)}"`);
+    return description || null;
+  } catch (e: any) {
+    console.error('[V68] describeImage error:', e.message);
+    return null;
+  }
 }
 
 async function loadTechniques(): Promise<Record<string, any[]>> {
@@ -386,7 +491,7 @@ function detectPendingQuestion(history: any[]): PendingQuestion {
       lastQuestionIdx = i;
       // Extraire la question (la dernière phrase avec ?)
       const sentences = botMsg.split(/(?<=[.!?])\s+/);
-      const qSentence = sentences.filter(s => /\?/.test(s)).pop() || botMsg;
+      const qSentence = sentences.filter((s: string) => /\?/.test(s)).pop() || botMsg;
       lastQuestion = qSentence.trim();
       break;
     }
@@ -952,7 +1057,7 @@ function buildTruthReminder(mem: ProspectMemory): string | null {
   return `[SYSTÈME] ⚠️ VÉRITÉ VÉRIFIÉE (extraite de SES messages uniquement): ${truths.join(' | ')}. TOUT AUTRE fait/chiffre/info que tu aurais mentionné dans tes réponses passées est POTENTIELLEMENT FAUX. Ne reprends RIEN de tes anciens messages sans vérifier que ça vient de LUI.`;
 }
 
-function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory): any[] {
+function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory, mediaCtx?: string | null): any[] {
   const msgs: any[] = [];
   for (const h of history.slice(-20)) {
     if (h.user_message) msgs.push({ role: 'user', content: h.user_message });
@@ -961,6 +1066,10 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory):
   // Injecter un rappel anti-hallucination JUSTE avant le message actuel
   const truthCheck = buildTruthReminder(mem);
   if (truthCheck) msgs.push({ role: 'user', content: truthCheck });
+  // V68: Injecter le contexte média (transcription vocal ou description image) AVANT le message courant
+  if (mediaCtx) {
+    msgs.push({ role: 'user', content: `[CONTEXTE INTERNE — INVISIBLE AU PROSPECT]\n${mediaCtx}` });
+  }
   msgs.push({ role: 'user', content: currentMsg });
   const cleaned: any[] = [];
   let lastRole = '';
@@ -972,7 +1081,7 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory):
   return cleaned;
 }
 
-async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile, isOutbound: boolean = false): Promise<string> {
+async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile, isOutbound: boolean = false, mediaInfo?: { type: 'image' | 'audio' | null; processedText: string | null; context: string | null }): Promise<string> {
   const key = await getMistralKey();
   if (!key) return 'Souci technique, réessaie dans 2 min';
   const isDistress = isDistressOrStuck === true && detectDistress(msg, history);
@@ -991,9 +1100,14 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
     console.log(`[V65] 🔴 HALLUCINATION DÉTECTÉE: ${hallCheck.details.join(' | ')}`);
     sys += `\n\n🔴 HALLUCINATION DÉTECTÉE DANS TES MESSAGES PRÉCÉDENTS:\n${hallCheck.details.map(d => '- ' + d).join('\n')}\nTu as dit des choses FAUSSES au prospect. RESET TOTAL. Relis la conversation depuis le début. BASE-TOI UNIQUEMENT sur le bloc ✅ SEULE SOURCE DE VÉRITÉ. Ne mentionne PLUS jamais ces infos fausses. Si le prospect y fait référence, dis "Excuse-moi, j'ai été confus sur ce point." et REPARS de ce qui est VRAI.`;
   }
-  const messages = buildMessages(history, msg, mem);
+  // V68: passer le contexte média à buildMessages + si vocal transcrit, remplacer le msg
+  const mType = mediaInfo?.type || null;
+  const mText = mediaInfo?.processedText || null;
+  const mCtx = mediaInfo?.context || null;
+  const effectiveMsg = (mType === 'audio' && mText) ? mText : msg;
+  const messages = buildMessages(history, effectiveMsg, mem, mCtx);
   const tokens = isDistress ? 100 : MAX_TOKENS;
-  console.log(`[V65] Phase=${phaseResult.phase} Trust=${phaseResult.trust} Funnel=${phaseResult.funnel.funnelStep} Qual=${phaseResult.qual} #${phaseResult.n + 1}${isStuck ? ' ⚠️STUCK' : ''}`);
+  console.log(`[V68] Phase=${phaseResult.phase} Trust=${phaseResult.trust} Funnel=${phaseResult.funnel.funnelStep} Qual=${phaseResult.qual} #${phaseResult.n + 1}${isStuck ? ' ⚠️STUCK' : ''}${mText ? ` 📎MEDIA=${mType}` : ''}`);
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const temp = 0.7 + (attempt * 0.12);
@@ -1061,13 +1175,35 @@ export default async function handler(req: Request): Promise<Response> {
     const isVoiceMessage = !!(body.attachment_type === 'audio' || body.type === 'audio' || body.media_type === 'audio'
       || body.attachments?.some?.((a: any) => a.type === 'audio' || /audio|voice|vocal|\.ogg|\.m4a|\.opus|\.mp3/i.test(a.url || a.payload?.url || ''))
       || (userMessage && /\.ogg|\.m4a|\.opus|\.mp3|audio_clip|voice_message|vocal/i.test(userMessage)));
+
+    // === V68: EXTRACTION + TRAITEMENT MÉDIA (Pixtral / Whisper) ===
+    const media = extractMediaUrl(body);
+    let mediaProcessedText: string | null = null;
+    let mediaContext: string | null = null;
+    if (media.type === 'audio' && media.url) {
+      console.log(`[V68] 🎤 Audio détecté: ${media.url.substring(0, 80)}`);
+      mediaProcessedText = await transcribeAudio(media.url);
+      if (mediaProcessedText) {
+        mediaContext = `[Le prospect a envoyé un MESSAGE VOCAL. Transcription: "${mediaProcessedText}"]\nRéponds comme si tu avais ÉCOUTÉ son vocal. JAMAIS mentionner "transcription", "vocal", "audio". Tu l'as ENTENDU, point.`;
+        console.log(`[V68] ✅ Vocal transcrit: "${mediaProcessedText.substring(0, 80)}"`);
+      }
+    } else if (media.type === 'image' && media.url) {
+      console.log(`[V68] 📸 Image détectée: ${media.url.substring(0, 80)}`);
+      const imageDesc = await describeImage(media.url);
+      if (imageDesc) {
+        mediaProcessedText = imageDesc;
+        mediaContext = `[Le prospect a envoyé une IMAGE. Ce que tu vois: "${imageDesc}"]\nRéponds comme si tu VOYAIS l'image. JAMAIS mentionner "description", "analyse d'image", "intelligence artificielle". Tu VOIS l'image, point. Commente naturellement ce que tu observes.`;
+        console.log(`[V68] ✅ Image décrite: "${imageDesc.substring(0, 80)}"`);
+      }
+    }
+
     // EXTRACTION PROFIL IG depuis le payload ManyChat
     const profile = extractProfileFromPayload(body);
     // DÉTECTION LIVE CHAT / INTERVENTION MANUELLE
     const isLiveChat = !!(body.live_chat || body.is_live_chat || body.live_chat_active || body.operator_id || body.agent_id
       || body.custom_fields?.live_chat || body.custom_fields?.bot_paused
       || (body.source && body.source !== 'automation' && body.source !== 'flow'));
-    console.log(`[V65] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, liveChat: isLiveChat, profile: { name: profile.fullName, ig: profile.igUsername, metier: profile.metierIndice } })}`);
+    console.log(`[V68] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, media: media.type, mediaProcessed: !!mediaProcessedText, liveChat: isLiveChat, profile: { name: profile.fullName, ig: profile.igUsername, metier: profile.metierIndice } })}`);
     if (!userId || !userMessage) return mcRes('Envoie-moi un message');
 
     // COMMANDES ADMIN: //pause, //resume, //outbound (envoyées manuellement par Djibril)
@@ -1116,7 +1252,13 @@ export default async function handler(req: Request): Promise<Response> {
     }
 
     // === V65 DEBOUNCE MECHANISM ===
-    const pendingSave = await savePending(platform, userId, userMessage);
+    // V68: Si vocal transcrit, stocker la transcription + indicateur dans l'historique
+    const msgToStore = (media.type === 'audio' && mediaProcessedText)
+      ? `[🎤 Vocal] ${mediaProcessedText}`
+      : (media.type === 'image' && mediaProcessedText)
+        ? `[📸 Image: ${mediaProcessedText.substring(0, 100)}] ${userMessage}`
+        : userMessage;
+    const pendingSave = await savePending(platform, userId, msgToStore);
     const savedAt = pendingSave.created_at;
     console.log(`[V65] PENDING saved at ${savedAt.substring(11, 19)}`);
 
@@ -1158,7 +1300,8 @@ export default async function handler(req: Request): Promise<Response> {
 
     if (isDistress) {
       console.log('[V65] DISTRESS MODE');
-      const response = await generateWithRetry(userId, platform, msg, history, true, mem, profile, isOutbound);
+      const mInfo = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
+      const response = await generateWithRetry(userId, platform, msg, history, true, mem, profile, isOutbound, mInfo);
       let sent = false;
       if (subscriberId) { sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
       await updatePendingResponses(platform, userId, response);
@@ -1178,26 +1321,34 @@ export default async function handler(req: Request): Promise<Response> {
     );
     if (isStuck) console.log('[V65] ⚠️ SPIRALE DÉTECTÉE — forçage Mistral avec reset');
     let response: string | null = null;
-    // === ANTI-DÉTECTION: images + questions bot ===
+    // === V68: TRAITEMENT MÉDIA INTELLIGENT (Pixtral/Whisper) + FALLBACK DEFLECT ===
     if (pattern === 'voice_message' || pattern === 'image_link') {
-      // Prospect envoie un média (vocal/image) — on ne peut PAS le consulter, JAMAIS le dire
-      // JAMAIS mentionner "image", "vocal", "audio", "photo", "fichier" — esquive 100% humaine
-      const mediaDeflects = [
-        "Ah ça passe pas de mon côté, mon tel bug un peu, écris-moi plutôt",
-        "J'ai un souci d'affichage là, dis-moi en texte c'est plus simple",
-        "Ça charge pas chez moi, balance par écrit",
-        "Mon tel déconne, envoie par message c'est mieux",
-        "Ça veut pas s'ouvrir de mon côté, tape-moi ça vite fait",
-        "J'suis en déplacement là, c'est plus simple par écrit",
-        "J'ai la co qui rame, écris-moi direct",
-        "Ça passe pas sur mon tel, dis-moi en texte ce que tu voulais me dire",
-        "Mon appli bug un peu, envoie par message stp",
-        "J'arrive pas à ouvrir ça là, dis-moi par écrit"
-      ];
-      const usedDeflects = recentBotMsgs.filter(r => mediaDeflects.some(d => calculateSimilarity(r, d) > 0.3));
-      const availDeflects = mediaDeflects.filter(d => !usedDeflects.some(u => calculateSimilarity(d, u) > 0.3));
-      response = (availDeflects.length ? availDeflects : mediaDeflects)[Date.now() % (availDeflects.length || mediaDeflects.length)];
-      console.log(`[V65] MEDIA DEFLECT (${pattern}) — anti-détection`);
+      if (mediaProcessedText && mediaContext) {
+        // ✅ MÉDIA TRAITÉ AVEC SUCCÈS — on passe au chatbot avec le contexte
+        console.log(`[V68] ✅ Média traité (${media.type}) — envoi à Mistral avec contexte`);
+        // On ne set PAS response ici — on laisse tomber dans le flow normal Mistral
+        // mais on injecte le contexte média dans le message utilisateur
+        // Le message effectif pour Mistral = transcription vocal OU texte original + contexte image
+        // Ceci sera géré dans buildMessages ci-dessous
+      } else {
+        // ❌ TRAITEMENT ÉCHOUÉ — fallback sur le deflect classique
+        const mediaDeflects = [
+          "Ah ça passe pas de mon côté, mon tel bug un peu, écris-moi plutôt",
+          "J'ai un souci d'affichage là, dis-moi en texte c'est plus simple",
+          "Ça charge pas chez moi, balance par écrit",
+          "Mon tel déconne, envoie par message c'est mieux",
+          "Ça veut pas s'ouvrir de mon côté, tape-moi ça vite fait",
+          "J'suis en déplacement là, c'est plus simple par écrit",
+          "J'ai la co qui rame, écris-moi direct",
+          "Ça passe pas sur mon tel, dis-moi en texte ce que tu voulais me dire",
+          "Mon appli bug un peu, envoie par message stp",
+          "J'arrive pas à ouvrir ça là, dis-moi par écrit"
+        ];
+        const usedDeflects = recentBotMsgs.filter(r => mediaDeflects.some(d => calculateSimilarity(r, d) > 0.3));
+        const availDeflects = mediaDeflects.filter(d => !usedDeflects.some(u => calculateSimilarity(d, u) > 0.3));
+        response = (availDeflects.length ? availDeflects : mediaDeflects)[Date.now() % (availDeflects.length || mediaDeflects.length)];
+        console.log(`[V68] MEDIA DEFLECT (${pattern}) — traitement échoué, fallback`);
+      }
     }
     if (pattern === 'suspect_bot') {
       // Le prospect demande si c'est un bot — esquiver naturellement
@@ -1237,8 +1388,9 @@ export default async function handler(req: Request): Promise<Response> {
       if (response) console.log('[V65] DIRECT');
     }
     if (!response) {
-      response = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile, isOutbound);
-      console.log(`[V65] MISTRAL ${response.length}c`);
+      const mInfo2 = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
+      response = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile, isOutbound, mInfo2);
+      console.log(`[V68] MISTRAL ${response.length}c`);
     }
     if (hasSalamBeenSaid(history) && /^salam/i.test(response)) {
       response = response.replace(/^salam[\s!?.]*(?:aleykoum)?[\s!?.]*(?:fr[eé]rot)?[\s!?.,]*/i, '').trim();
