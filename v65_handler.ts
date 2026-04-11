@@ -620,6 +620,7 @@ function isSelfTalk(text: string): boolean {
     /je (ne )?(peux|suis) pas.{0,20}(voir|ouvrir|lire|afficher|accéder).{0,20}(image|photo|vidéo|fichier|story)/i,
     /je n.?ai pas (accès|la capacité).{0,30}(instagram|image|photo|voir)/i,
     /je suis (un |une )?(ia|intelligence|bot|chatbot|assistant virtuel|programme)/i,
+    /\[.*(?:si |son |sinon|domaine|visible|profil|insérer|remplacer|nom du|prénom).*\]/i,
   ];
   return selfTalkPatterns.some(p => p.test(text));
 }
@@ -648,6 +649,8 @@ function clean(text: string): string {
   r = r.replace(/\b(language model|LLM|GPT|Claude|OpenAI|Anthropic|Mistral|modèle de langage)\b/gi, '');
   // ANTI-TEMPLATE: supprimer toute variable ManyChat/template {{...}} qui leak
   r = r.replace(/\{\{[^}]*\}\}/g, '').replace(/\{%[^%]*%\}/g, '');
+  // ANTI-PLACEHOLDER: supprimer tout texte entre crochets [comme ça] qui est une instruction non-résolue
+  r = r.replace(/\[[^\]]{5,}\]/g, '').replace(/\s{2,}/g, ' ').trim();
   // ANTI-EMOJI: strip TOUS les émojis — Djibril parle comme un mec, pas un CM
   r = r.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '');
   // Nettoyage espaces multiples après strips
@@ -754,7 +757,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
       maxChars = 120;
       break;
     case 'EXPLORER_OUTBOUND':
-      phaseInstr = `⚠️ MODE OUTBOUND: C'est DJIBRIL qui a DM ce prospect EN PREMIER. Le prospect RÉPOND à un message que Djibril lui a envoyé. JAMAIS dire "qu'est-ce qui t'amène" ou "qu'est-ce qui t'a parlé" — C'EST TOI QUI ES ALLÉ VERS LUI. Ton approche: 1) Accuse réception de SA réponse avec intérêt sincère 2) Rebondis sur ce qu'il dit 3) Montre que tu t'es intéressé à LUI (profil, métier si visible) 4) Pose UNE question ouverte liée à ce qu'il vient de dire. Ton = décontracté, comme si tu continuais une conv déjà lancée. PAS de présentation, PAS de "bienvenue", PAS de onboarding.${profileBlock ? ' Utilise les indices de son profil pour montrer que tu connais un peu son univers.' : ''}`;
+      phaseInstr = `⚠️ MODE OUTBOUND: C'est DJIBRIL qui a DM ce prospect EN PREMIER. Le prospect RÉPOND à un message que Djibril lui a envoyé. JAMAIS dire "qu'est-ce qui t'amène" ou "qu'est-ce qui t'a parlé" — C'EST TOI QUI ES ALLÉ VERS LUI. Ton approche: 1) Accuse réception de SA réponse avec intérêt sincère 2) Rebondis sur ce qu'il dit 3) Pose UNE question ouverte liée à ce qu'il vient de dire. Ton = décontracté, comme si tu continuais une conv déjà lancée. PAS de présentation, PAS de "bienvenue", PAS de onboarding.${profileBlock ? ' ' + profileBlock.trim() : ''}`;
       maxChars = 180;
       break;
     case 'EXPLORER':
@@ -823,6 +826,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
 #10: ANTI-BOUCLE — Tes réponses passées (messages "assistant" dans l'historique) peuvent contenir des ERREURS ou des hallucinations. Ne JAMAIS reprendre un fait/chiffre/info que TU as dit dans un message précédent comme si c'était vrai. La SEULE source fiable = les messages du PROSPECT (role: user) + le bloc 🧠 TU SAIS DÉJÀ. Si tu as dit un truc faux avant, NE LE RÉPÈTE PAS. Ignore-le et repars de ce que LUI a RÉELLEMENT écrit.
 #11: PATIENCE — Si tu as posé une question et qu'il n'a pas encore répondu dessus, NE LA REPOSE PAS. Traite ce qu'il dit MAINTENANT. Il répondra à ta question quand il sera prêt. En DM les gens envoient plusieurs messages d'affilée, ils lisent pas forcément ta question tout de suite. Reposer = harceler.
 #12: MESSAGES FRAGMENTÉS — Son message peut contenir PLUSIEURS fragments (séparés par des virgules). C'est NORMAL en DM: les gens fragmentent leur pensée en 2-3 messages rapides. Toi tu lis TOUT comme UN SEUL message. Ta réponse = UNE SEULE réponse fluide qui couvre l'ENSEMBLE de ce qu'il a dit. JAMAIS répondre fragment par fragment. Tu captes le sens GLOBAL et tu rebondis dessus comme si c'était une seule phrase naturelle.
+#14: ZÉRO PLACEHOLDER — Tu es Djibril en DM, PAS un rédacteur de template. JAMAIS écrire de trucs entre crochets comme [son domaine], [insérer nom], [si visible], [son métier]. Si tu sais pas une info, POSE LA QUESTION au prospect. Si t'as une info depuis le profil, UTILISE-LA directement. Chaque mot de ta réponse doit être un VRAI message envoyable tel quel. Si t'écrirais pas ça sur ton propre tel, écris-le pas.
 
 CONCEPTS (1 par msg, jamais un grillé):
 Récipient cérébral / Paralysie / Encre passive vs active / Avare cognitif / Boucle d'observation / Croyance de compréhension
