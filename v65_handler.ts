@@ -816,7 +816,8 @@ INTERDIT: affirmer des choses sur sa vie qu'il a pas dites, diagnostiquer/psycha
 🇫🇷 FRANÇAIS ORAL UNIQUEMENT. Pas UN seul mot d'anglais. Tout en français, registre oral, comme un pote qui parle en DM. Si un terme n'a pas d'équivalent français courant → reformule en mots simples.
 
 1-2 phrases MAX. 1 BLOC. MAX ${maxChars} chars. ZÉRO ÉMOJI. Tu mets JAMAIS d'émoji. C'est un mec de 23 ans qui écrit, pas un community manager. Les rares exceptions (1 max tous les 10 messages): uniquement pour renforcer un moment fort, genre quand tu envoies un lien ou que tu félicites. Sinon = ZÉRO. "Adam" INTERDIT. ${salamRule} JAMAIS de prix.
-✏️ PONCTUATION NATURELLE: ÉVITE les points en fin de phrase. Un mec de 23 ans en DM il met PAS de point à la fin. Il écrit "je capte frérot" pas "Je capte frérot." Les points ça fait scolaire, trop appliqué, pas naturel. Les seules ponctuations autorisées: ? (questions) et parfois ! (énergie). Le reste = rien, juste le message brut comme sur un tel.
+✏️ PONCTUATION NATURELLE: ÉVITE les points en fin de phrase. Un mec de 23 ans en DM il met PAS de point à la fin. Il écrit "je capte" pas "Je capte." Les points ça fait scolaire, trop appliqué, pas naturel. Les seules ponctuations autorisées: ? (questions) et parfois ! (énergie). Le reste = rien, juste le message brut comme sur un tel.
+🗣️ FRÉROT MODÉRÉ: "frérot" c'est cool mais PAS à chaque message. Maximum 1 frérot tous les 4-5 messages. Varie: parfois "frérot", parfois rien, parfois "mon gars", parfois juste tu parles direct sans appellation. Si t'as déjà dit frérot dans les 3 derniers messages → INTERDIT d'en remettre un.
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_VALEUR}. ⛔ INTERDIT: landing page et Calendly (PAS ENCORE).` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN AUTORISÉ: UNIQUEMENT ${LINK_LANDING}. ⛔ INTERDIT: Calendly (LANDING D'ABORD).` : `LIEN AUTORISÉ: ${CALENDLY_LINK}. Les autres liens ont déjà été envoyés.`}
 
 ${pending.hasPending ? `\n⏸️ PATIENCE: Ta dernière question "${pending.question.substring(0, 80)}" est ENCORE EN ATTENTE (${pending.turnsWaiting} msg depuis). ${pending.turnsWaiting >= 2 ? 'ABANDONNE cette question, passe à autre chose.' : 'NE LA REPOSE PAS. Réponds à ce qu\'il dit MAINTENANT. Laisse-lui le temps. Il reviendra dessus quand il sera prêt. Si tu reposes la même question → il va se sentir harcelé.'}` : ''}
@@ -900,7 +901,7 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory):
 
 async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile, isOutbound: boolean = false): Promise<string> {
   const key = await getMistralKey();
-  if (!key) return 'Souci technique frérot. Réessaie dans 2 min.';
+  if (!key) return 'Souci technique, réessaie dans 2 min';
   const isDistress = isDistressOrStuck === true && detectDistress(msg, history);
   const phaseResult = getPhase(history, msg, isDistress, mem, isOutbound);
   const memoryBlock = formatMemoryBlock(mem);
@@ -950,7 +951,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
       console.error('[V65] API error:', JSON.stringify(result).substring(0, 200));
     } catch (e: any) { console.error('[V65] error:', e.message); }
   }
-  const fallbacks = ["Dis-moi en plus, j'écoute.", "Continue frérot, je veux comprendre ton truc.", "Intéressant ce que tu dis. Développe ?", "J'entends. Et du coup t'en es où concrètement ?", "Ok je vois. Et c'est quoi la suite idéale pour toi ?", "Merci de partager ça. Qu'est-ce qui t'aiderait le plus là maintenant ?"];
+  const fallbacks = ["Dis-moi en plus, j'écoute", "Continue je veux comprendre ton truc", "Intéressant ce que tu dis, développe ?", "J'entends, et du coup t'en es où concrètement ?", "Ok je vois, c'est quoi la suite idéale pour toi ?", "Merci de partager ça, qu'est-ce qui t'aiderait le plus là maintenant ?"];
   // Choisir un fallback différent de ceux déjà envoyés
   const usedFallbacks = recentResponses.map(r => r.toLowerCase());
   const available = fallbacks.filter(f => !usedFallbacks.some(u => calculateSimilarity(f, u) > 0.2));
@@ -994,7 +995,7 @@ export default async function handler(req: Request): Promise<Response> {
       || body.custom_fields?.live_chat || body.custom_fields?.bot_paused
       || (body.source && body.source !== 'automation' && body.source !== 'flow'));
     console.log(`[V65] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, liveChat: isLiveChat, profile: { name: profile.fullName, ig: profile.igUsername, metier: profile.metierIndice } })}`);
-    if (!userId || !userMessage) return mcRes('Envoie-moi un message frérot.');
+    if (!userId || !userMessage) return mcRes('Envoie-moi un message');
 
     // COMMANDES ADMIN: //pause, //resume, //outbound (envoyées manuellement par Djibril)
     if (userMessage.trim().toLowerCase().startsWith('//pause')) {
@@ -1104,12 +1105,12 @@ export default async function handler(req: Request): Promise<Response> {
       // Prospect envoie un média (vocal/image) — on ne peut PAS le consulter, JAMAIS le dire
       // JAMAIS mentionner "image", "vocal", "audio", "photo", "fichier" — esquive 100% humaine
       const mediaDeflects = [
-        "Ah ça passe pas de mon côté frérot, mon tel bug un peu, écris-moi plutôt",
+        "Ah ça passe pas de mon côté, mon tel bug un peu, écris-moi plutôt",
         "J'ai un souci d'affichage là, dis-moi en texte c'est plus simple",
-        "Ça charge pas chez moi, t'inquiète balance par écrit",
+        "Ça charge pas chez moi, balance par écrit",
         "Mon tel déconne, envoie par message c'est mieux",
         "Ça veut pas s'ouvrir de mon côté, tape-moi ça vite fait",
-        "J'suis en déplacement là, c'est plus simple par écrit frérot",
+        "J'suis en déplacement là, c'est plus simple par écrit",
         "J'ai la co qui rame, écris-moi direct",
         "Ça passe pas sur mon tel, dis-moi en texte ce que tu voulais me dire",
         "Mon appli bug un peu, envoie par message stp",
@@ -1123,11 +1124,11 @@ export default async function handler(req: Request): Promise<Response> {
     if (pattern === 'suspect_bot') {
       // Le prospect demande si c'est un bot — esquiver naturellement
       const botDeflects = [
-        "Haha non frérot c'est bien moi, pourquoi tu demandes ?",
+        "Haha non c'est bien moi, pourquoi tu demandes ?",
         "Mdrr t'inquiète c'est moi, qu'est-ce qui te fait dire ça ?",
         "Nah c'est Djibril, je réponds juste vite parce que j'suis actif là",
-        "Lol non, j'suis juste efficace, c'est tout. Du coup tu me disais quoi ?",
-        "Haha j'ai l'habitude qu'on me dise ça, mais non c'est bien moi. Bref, on en était où ?"
+        "Lol non j'suis juste efficace c'est tout, du coup tu me disais quoi ?",
+        "Haha j'ai l'habitude qu'on me dise ça mais non c'est bien moi, bref on en était où ?"
       ];
       const usedBotDeflects = recentBotMsgs.filter(r => botDeflects.some(d => calculateSimilarity(r, d) > 0.3));
       const availBotDeflects = botDeflects.filter(d => !usedBotDeflects.some(u => calculateSimilarity(d, u) > 0.3));
@@ -1137,7 +1138,7 @@ export default async function handler(req: Request): Promise<Response> {
     if (pattern && !isStuck && !response) {
       console.log(`[V65] PATTERN: ${pattern} | Funnel: ${funnel.funnelStep}`);
       if (pattern === 'prospect_demande' || pattern === 'demande_doc') {
-        if (funnel.funnelStep === 'NEED_VALEUR') response = `Tiens frérot: ${LINK_VALEUR}`;
+        if (funnel.funnelStep === 'NEED_VALEUR') response = `Tiens regarde ça: ${LINK_VALEUR}`;
         else if (funnel.funnelStep === 'NEED_LANDING') response = `Tiens je t'envoie ça: ${LINK_LANDING} — regarde tout. Et si tu reviens motivé, je te ferai une offre que tu pourras pas refuser`;
       } else if (pattern === 'ask_calendly') {
         if (funnel.funnelStep === 'NEED_VALEUR') response = `Avant l'appel, jette un oeil: ${LINK_VALEUR}`;
@@ -1185,7 +1186,7 @@ export default async function handler(req: Request): Promise<Response> {
     return sent ? mcEmpty() : mcRes(response);
   } catch (e: any) {
     console.error('[V65] Error:', e.message);
-    return mcRes("Souci technique frérot, réessaie !");
+    return mcRes("Souci technique, réessaie !");
   }
 }
 
