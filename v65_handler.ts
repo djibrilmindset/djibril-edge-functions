@@ -98,8 +98,8 @@ async function setField(subscriberId: string, text: string): Promise<void> {
 async function getHistory(platform: string, userId: string): Promise<any[]> {
   try {
     const { data } = await supabase.from('conversation_history').select('user_message, bot_response, created_at').eq('platform', platform).eq('user_id', userId).order('created_at', { ascending: false }).limit(25);
-    // Filter out __PENDING__ and __ADMIN_TAKEOVER__ responses from history (only use complete exchanges)
-    const filtered = (data || []).filter((h: any) => h.bot_response !== '__PENDING__' && h.bot_response !== '__ADMIN_TAKEOVER__').reverse();
+    // Filter out __PENDING__, __ADMIN_TAKEOVER__ and __OUTBOUND__ responses from history (only use complete exchanges)
+    const filtered = (data || []).filter((h: any) => h.bot_response !== '__PENDING__' && h.bot_response !== '__ADMIN_TAKEOVER__' && h.bot_response !== '__OUTBOUND__').reverse();
     return filtered;
   } catch { return []; }
 }
@@ -177,6 +177,21 @@ const METIER_KEYWORDS: [RegExp, string][] = [
   [/secur|vigil|agent/i, 'la sécurité'],
   [/transport|chauffeur|vtc|taxi/i, 'le transport'],
   [/nettoy|clean|menage/i, 'le nettoyage'],
+  [/tattoo|tatu|tatou|ink|pierc/i, 'le tatouage/piercing'],
+  [/esth[ée]ti|nail|ongle|manucur|beaut[ée]|cil|maquill/i, "l'esthétique/beauté"],
+  [/proth[ée]s|dentaire|labo.*dent/i, 'la prothèse dentaire'],
+  [/pizza|kebab|snack|fast.?food|tacos/i, 'la restauration rapide'],
+  [/bouch|charc|traiteur/i, 'la boucherie/traiteur'],
+  [/fleur|florist/i, 'la fleuristerie'],
+  [/press|blanchiss|laverie/i, 'le pressing/laverie'],
+  [/paysag|jardin|espaces?\s*verts/i, 'le paysagisme'],
+  [/ambulan|param[ée]dic|smur|urgenc/i, "l'ambulance/urgences"],
+  [/aide.?soign|ehpad|auxiliaire/i, "l'aide-soignance"],
+  [/educateur|animat|social|jeunesse/i, "l'éducation/social"],
+  [/compta|expert.?compt|fiscali/i, 'la comptabilité'],
+  [/assurance|mutuell|courtier/i, "l'assurance"],
+  [/logisti|magasin|entrepot|stock|cariste/i, 'la logistique'],
+  [/serru|vitrier|store|volet/i, 'la serrurerie/dépannage'],
 ];
 
 function extractProfileFromPayload(body: any): ProspectProfile {
@@ -512,7 +527,7 @@ function getFunnelState(history: any[]): FunnelState {
 
 interface PhaseResult { phase: string; n: number; trust: number; funnel: FunnelState; offerPitched: boolean; qual: QualStatus; }
 
-function getPhase(history: any[], msg: string, isDistress: boolean, mem: ProspectMemory): PhaseResult {
+function getPhase(history: any[], msg: string, isDistress: boolean, mem: ProspectMemory, isOutbound: boolean = false): PhaseResult {
   const n = history.length;
   const m = msg.toLowerCase();
   const allBot = history.map((h: any) => (h.bot_response || '').toLowerCase()).join(' ');
@@ -542,13 +557,13 @@ function getPhase(history: any[], msg: string, isDistress: boolean, mem: Prospec
     return { phase: 'ATTENTE_RETOUR', n, trust, funnel, offerPitched, qual };
   }
   if (offerPitched && funnel.funnelStep === 'NEED_CALENDLY') return { phase: 'CLOSER', n, trust, funnel, offerPitched, qual };
-  // Détection prospect CHAUD (réponse à une conv manuelle de Djibril)
-  // Si n=0 mais le message est PAS un salut froid → c'est une réponse à un DM manuel → skip ACCUEIL
+  // DÉTECTION OUTBOUND: Djibril a démarché ce prospect (flag DB ou heuristique)
   const isColdGreeting = /^(salut|salam|hey|yo|wesh|wsh|hello|bonjour|bonsoir|cc|coucou)[\s!?.]*$/i.test(m.trim());
-  const isSubstantialReply = m.length > 15 || /\?/.test(m) || /ouais|oui|grave|exact|carrément|trop vrai|je (veux|suis|fais)|j'ai|merci|intéress/i.test(m);
-  if (n === 0 && !isColdGreeting && isSubstantialReply) {
-    console.log('[V65] WARM PROSPECT detected (reply to manual DM)');
-    return { phase: 'EXPLORER', n, trust: Math.max(trust, 2), funnel, offerPitched, qual };
+  const isReplyPattern = m.length > 8 || /\?/.test(m) || /ouais|oui|non|nan|grave|exact|carrément|trop vrai|je (veux|suis|fais)|j'ai|merci|intéress|ah|ok|genre|c.?est quoi|comment|pourquoi|de quoi/i.test(m);
+  const isOutboundDetected = isOutbound || (n === 0 && !isColdGreeting && isReplyPattern);
+  if (isOutboundDetected && n <= 2) {
+    console.log(`[V65] 📤 OUTBOUND MODE — phase EXPLORER_OUTBOUND (flag=${isOutbound}, heuristic=${!isColdGreeting && isReplyPattern})`);
+    return { phase: 'EXPLORER_OUTBOUND', n, trust: Math.max(trust, 2), funnel, offerPitched, qual };
   }
   if (n === 0) return { phase: 'ACCUEIL', n, trust, funnel, offerPitched, qual };
   if (n <= 2) return { phase: 'EXPLORER', n, trust, funnel, offerPitched, qual };
@@ -589,7 +604,7 @@ function clean(text: string): string {
   let r = text.replace(/\s*[\u2013\u2014]\s*/g, ', ').replace(/\s*-{2,}\s*/g, ', ');
   r = r.replace(/\bAdam\b/gi, 'toi');
   // ANTI-FUITE: strip termes techniques/instructions qui leakent dans la réponse
-  r = r.replace(/\b(ACCUEIL|EXPLORER|CREUSER|RÉVÉLER|QUALIFIER|CLOSER|PROPOSER_VALEUR|ENVOYER_VALEUR|ENVOYER_LANDING|ENVOYER_CALENDLY|DÉTRESSE|DISQUALIFIER|DÉSENGAGER|ATTENTE_RETOUR|RETOUR_PROSPECT)\b/g, '');
+  r = r.replace(/\b(ACCUEIL|EXPLORER|EXPLORER_OUTBOUND|CREUSER|RÉVÉLER|QUALIFIER|CLOSER|PROPOSER_VALEUR|ENVOYER_VALEUR|ENVOYER_LANDING|ENVOYER_CALENDLY|DÉTRESSE|DISQUALIFIER|DÉSENGAGER|ATTENTE_RETOUR|RETOUR_PROSPECT)\b/g, '');
   r = r.replace(/\b(Trust|FUNNEL|QUAL|PHASE|NEED_VALEUR|NEED_LANDING|NEED_CALENDLY|COMPLETE|funnelStep|phaseInstr|maxChars|botBans|conceptBans)\b/g, '');
   r = r.replace(/\b(Pellabère|Cialdini|Camp|Voss|LearnErra|VOIR-NOMMER|PERMETTRE-GUIDER|affect labeling|neediness|social proof)\b/gi, '');
   r = r.replace(/\b(DRDP|FOMO|PAS\/PAP|FAB|CTA)\b/g, '');
@@ -664,7 +679,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   const metierPainBlock = mem.metier ? `\n🎯 DOULEUR MÉTIER CONNUE: Il fait "${mem.metier}". CREUSE avec humilité comment CE MÉTIER PRÉCIS l'empêche d'être autonome. Questions intrinsèques adaptées: "Qu'est-ce qui fait que ${mem.metier} te laisse pas le temps de construire autre chose ?" / "Dans ${mem.metier}, c'est quoi le truc qui te bouffe le plus — le temps, l'énergie, ou la liberté ?" / "Si tu pouvais garder ce que t'aimes dans ${mem.metier} mais en étant libre financièrement et géographiquement, ça ressemblerait à quoi ?". CONNECTE toujours à l'AUTONOMIE: liberté de temps, liberté financière, liberté géographique. Le métier chronophage = le piège qui l'empêche de se suffire à lui-même. Mais HUMILITÉ: tu juges JAMAIS son métier, tu l'aides à VOIR par lui-même en quoi ça le bloque.` : '';
 
   // QUALIFICATION = seulement à partir de RÉVÉLER. Avant = pure connexion, ZÉRO question d'âge/budget/métier
-  const earlyPhases = ['ACCUEIL', 'EXPLORER', 'CREUSER'];
+  const earlyPhases = ['ACCUEIL', 'EXPLORER', 'EXPLORER_OUTBOUND', 'CREUSER'];
   let qualBlock = '';
   if (!earlyPhases.includes(phase)) {
     if (qual === 'unknown_age' && !asked.askedAge) qualBlock = '\n📊 QUAL: Âge INCONNU. Intègre-le NATURELLEMENT dans la conversation, jamais en question directe.';
@@ -695,6 +710,10 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
     case 'ACCUEIL':
       phaseInstr = `Premier contact FROID (il vient de t'écrire "salut/salam/hey"). ${salamDone ? '' : 'Salam + '}Question OUVERTE qui montre de la curiosité sincère pour LUI. Ex: "qu'est-ce qui t'a parlé ?" / "qu'est-ce qui t'amène ?". COURT et chaleureux. ZÉRO question perso (âge, métier, budget).`;
       maxChars = 120;
+      break;
+    case 'EXPLORER_OUTBOUND':
+      phaseInstr = `⚠️ MODE OUTBOUND: C'est DJIBRIL qui a DM ce prospect EN PREMIER. Le prospect RÉPOND à un message que Djibril lui a envoyé. JAMAIS dire "qu'est-ce qui t'amène" ou "qu'est-ce qui t'a parlé" — C'EST TOI QUI ES ALLÉ VERS LUI. Ton approche: 1) Accuse réception de SA réponse avec intérêt sincère 2) Rebondis sur ce qu'il dit 3) Montre que tu t'es intéressé à LUI (profil, métier si visible) 4) Pose UNE question ouverte liée à ce qu'il vient de dire. Ton = décontracté, comme si tu continuais une conv déjà lancée. PAS de présentation, PAS de "bienvenue", PAS de onboarding.${profileBlock ? ' Utilise les indices de son profil pour montrer que tu connais un peu son univers.' : ''}`;
+      maxChars = 180;
       break;
     case 'EXPLORER':
       phaseInstr = `VOIR (Pellabère) — Décris ce que tu perçois de sa situation en 1 phrase courte. Puis UNE question INTRINSÈQUE (pas "pourquoi?" mais "qu'est-ce qui fait que...?"). Ex: "Qu'est-ce qui fait que t'en es là aujourd'hui ?" / "C'est quoi le truc qui te bloque le plus ?". JUSTIFICATION: "Je te demande ça parce que [raison liée à LUI]". ZÉRO question d'âge/métier/budget ici — c'est trop tôt. Focus 100% sur son VÉCU et ses ÉMOTIONS.`;
@@ -852,11 +871,11 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory):
   return cleaned;
 }
 
-async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile): Promise<string> {
+async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile, isOutbound: boolean = false): Promise<string> {
   const key = await getClaudeKey();
   if (!key) return 'Souci technique frérot. Réessaie dans 2 min.';
   const isDistress = isDistressOrStuck === true && detectDistress(msg, history);
-  const phaseResult = getPhase(history, msg, isDistress, mem);
+  const phaseResult = getPhase(history, msg, isDistress, mem, isOutbound);
   const memoryBlock = formatMemoryBlock(mem);
   let sys = buildPrompt(history, phaseResult, memoryBlock, profile);
   // Si spirale détectée, injecter un RESET dans le prompt
@@ -948,7 +967,7 @@ export async function handler(req: Request): Promise<Response> {
     console.log(`[V65] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, liveChat: isLiveChat, profile: { name: profile.fullName, ig: profile.igUsername, metier: profile.metierIndice } })}`);
     if (!userId || !userMessage) return mcRes('Envoie-moi un message frérot.');
 
-    // COMMANDES ADMIN: //pause et //resume (envoyées manuellement par Djibril)
+    // COMMANDES ADMIN: //pause, //resume, //outbound (envoyées manuellement par Djibril)
     if (userMessage.trim().toLowerCase().startsWith('//pause')) {
       console.log(`[V65] 🛑 ADMIN PAUSE command pour ${userId}`);
       await supabase.from('conversation_history').insert({ platform, user_id: userId, user_message: '//pause', bot_response: '__ADMIN_TAKEOVER__', created_at: new Date().toISOString() });
@@ -957,6 +976,11 @@ export async function handler(req: Request): Promise<Response> {
     if (userMessage.trim().toLowerCase().startsWith('//resume') || userMessage.trim().toLowerCase().startsWith('//reprise')) {
       console.log(`[V65] ✅ ADMIN RESUME command pour ${userId}`);
       await supabase.from('conversation_history').delete().eq('user_id', userId).eq('bot_response', '__ADMIN_TAKEOVER__');
+      return mcEmpty();
+    }
+    if (userMessage.trim().toLowerCase().startsWith('//outbound') || userMessage.trim().toLowerCase().startsWith('//out')) {
+      console.log(`[V65] 📤 OUTBOUND flag pour ${userId}`);
+      await supabase.from('conversation_history').insert({ platform, user_id: userId, user_message: '//outbound', bot_response: '__OUTBOUND__', created_at: new Date().toISOString() });
       return mcEmpty();
     }
 
@@ -1005,6 +1029,13 @@ export async function handler(req: Request): Promise<Response> {
 
     // This is the LAST message (no newer pending ones). Gather ALL pending and respond.
     const [__, history] = await Promise.all([techPromise, getHistory(platform, userId)]);
+
+    // DÉTECTION OUTBOUND: vérifier si Djibril a flaggé ce prospect comme démarché
+    const { data: outboundCheck } = await supabase.from('conversation_history')
+      .select('id').eq('user_id', userId).eq('bot_response', '__OUTBOUND__').limit(1);
+    const isOutbound = !!(outboundCheck && outboundCheck.length > 0);
+    if (isOutbound) console.log(`[V65] 📤 OUTBOUND prospect — Djibril a initié la conversation`);
+
     const allPending = await getPendingMessages(platform, userId, new Date(new Date().getTime() - 60000).toISOString()); // Get all pending from last minute
     const pendingMessages = allPending.map((p: any) => p.user_message);
     const combinedMsg = pendingMessages.join(' — ');
@@ -1016,7 +1047,7 @@ export async function handler(req: Request): Promise<Response> {
 
     if (isDistress) {
       console.log('[V65] DISTRESS MODE');
-      const response = await generateWithRetry(userId, platform, msg, history, true, mem, profile);
+      const response = await generateWithRetry(userId, platform, msg, history, true, mem, profile, isOutbound);
       let sent = false;
       if (subscriberId) { sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
       await updatePendingResponses(platform, userId, response);
@@ -1055,7 +1086,7 @@ export async function handler(req: Request): Promise<Response> {
       if (response) console.log('[V65] DIRECT');
     }
     if (!response) {
-      response = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile);
+      response = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile, isOutbound);
       console.log(`[V65] CLAUDE ${response.length}c`);
     }
     if (hasSalamBeenSaid(history) && /^salam/i.test(response)) {
