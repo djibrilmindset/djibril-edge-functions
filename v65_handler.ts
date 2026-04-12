@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V70 — RESET COMPORTEMENTAL: DÉSIR-FIRST, messages courts, zéro valeur en DM, valeur = liens ===
+// === V70.1 — V70 + AUTO-OUTBOUND detection + Whisper FR oral hints + outbound persistant ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -142,12 +142,14 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
     const audioResponse = await fetch(audioUrl);
     if (!audioResponse.ok) { console.log(`[V69] Audio fetch failed: ${audioResponse.status}`); return null; }
     const audioBlob = await audioResponse.blob();
-    // Envoyer à Whisper
+    // Envoyer à Whisper — V70.1: prompt hints FR oral/banlieue pour meilleure reconnaissance
     const formData = new FormData();
     formData.append('file', audioBlob, 'audio.ogg');
     formData.append('model', WHISPER_MODEL);
     formData.append('language', 'fr');
     formData.append('response_format', 'text');
+    // V70.1: Le prompt guide Whisper sur le contexte — améliore la reconnaissance d'argot, verlan, accents, mots avalés
+    formData.append('prompt', "Conversation en français oral entre jeunes. Style banlieue, contractions: j'sais, t'as, j'fais, y'a, j'capte, wesh, frérot, le s, c'est chaud, grave, genre, en mode, le délire, tranquille, wallah, hamdoulilah, inchallah, starfoullah. Vocabulaire: business, mindset, argent, thune, oseille, biff, gagner sa vie, liberté, autonomie, bloquer, galérer, se lancer, entrepreneur, freelance, coiffeur, livreur, Uber, formation, accompagnement, coaching. Les gens parlent vite, avalent des syllabes, mélangent français et arabe.");
     const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${openaiKey}` },
@@ -739,12 +741,9 @@ function getPhase(history: any[], msg: string, isDistress: boolean, mem: Prospec
     return { phase: 'ATTENTE_RETOUR', n, trust, funnel, offerPitched, qual };
   }
   if (offerPitched && funnel.funnelStep === 'NEED_CALENDLY') return { phase: 'CLOSER', n, trust, funnel, offerPitched, qual };
-  // DÉTECTION OUTBOUND: Djibril a démarché ce prospect (flag DB ou heuristique)
-  const isColdGreeting = /^(salut|salam|hey|yo|wesh|wsh|hello|bonjour|bonsoir|cc|coucou)[\s!?.]*$/i.test(m.trim());
-  const isReplyPattern = m.length > 8 || /\?/.test(m) || /ouais|oui|non|nan|grave|exact|carrément|trop vrai|je (veux|suis|fais)|j'ai|merci|intéress|ah|ok|genre|c.?est quoi|comment|pourquoi|de quoi/i.test(m);
-  const isOutboundDetected = isOutbound || (n === 0 && !isColdGreeting && isReplyPattern);
-  if (isOutboundDetected && n <= 2) {
-    console.log(`[V65] 📤 OUTBOUND MODE — phase EXPLORER_OUTBOUND (flag=${isOutbound}, heuristic=${!isColdGreeting && isReplyPattern})`);
+  // V70.1: OUTBOUND PERSISTANT — si isOutbound=true (auto-détecté ou flag DB), rester en mode outbound plus longtemps
+  if (isOutbound && n <= 4) {
+    console.log(`[V70.1] 📤 OUTBOUND MODE — phase EXPLORER_OUTBOUND (n=${n})`);
     return { phase: 'EXPLORER_OUTBOUND', n, trust: Math.max(trust, 2), funnel, offerPitched, qual };
   }
   if (n === 0) return { phase: 'ACCUEIL', n, trust, funnel, offerPitched, qual };
@@ -963,8 +962,8 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
       maxChars = 80;
       break;
     case 'EXPLORER_OUTBOUND':
-      phaseInstr = `OUTBOUND: C'est TOI qui l'as DM. JAMAIS "qu'est-ce qui t'amène". Rebondis sur SA réponse + 1 question liée.${profileBlock ? ' ' + profileBlock.trim() : ''}`;
-      maxChars = 100;
+      phaseInstr = `OUTBOUND: C'est TOI (Djibril) qui a DM ce prospect EN PREMIER. Relis TES propres messages dans l'historique (role: assistant) pour comprendre CE QUE TU LUI AS DIT. Le prospect RÉPOND à TON message. JAMAIS dire "qu'est-ce qui t'amène" ou "qu'est-ce qui t'a parlé". Rebondis sur SA réponse avec intérêt + 1 question liée. Ton = décontracté, comme si tu continuais une conv.${profileBlock ? ' ' + profileBlock.trim() : ''}`;
+      maxChars = 120;
       break;
     case 'EXPLORER':
       phaseInstr = `EXPLORE SES DÉSIRS. Pas ses problèmes. "Tu veux aller où toi ?" / "C'est quoi ton truc idéal ?". Le DÉSIR d'abord, les obstacles APRÈS. Reprends SES mots.`;
@@ -1327,11 +1326,43 @@ export default async function handler(req: Request): Promise<Response> {
     // This is the LAST message (no newer pending ones). Gather ALL pending and respond.
     const [__, history] = await Promise.all([techPromise, getHistory(platform, userId)]);
 
-    // DÉTECTION OUTBOUND: vérifier si Djibril a flaggé ce prospect comme démarché
+    // V70.1: DÉTECTION OUTBOUND AUTOMATIQUE — 3 méthodes combinées
+    // 1. Flag DB explicite (//outbound)
     const { data: outboundCheck } = await supabase.from('conversation_history')
       .select('id').eq('user_id', userId).eq('bot_response', '__OUTBOUND__').limit(1);
-    const isOutbound = !!(outboundCheck && outboundCheck.length > 0);
-    if (isOutbound) console.log(`[V65] 📤 OUTBOUND prospect — Djibril a initié la conversation`);
+    let isOutbound = !!(outboundCheck && outboundCheck.length > 0);
+    // 2. AUTO-DETECT: analyser le PREMIER échange de l'historique
+    // Si le premier message user est une RÉPONSE (pas un salut froid), c'est que Djibril a écrit en premier
+    if (!isOutbound && history.length > 0) {
+      const firstUserMsg = (history[0]?.user_message || '').toLowerCase().trim();
+      const firstBotMsg = (history[0]?.bot_response || '').toLowerCase().trim();
+      // Si le premier bot_response ressemble à un message d'accroche Djibril (pas une réponse bot classique)
+      // OU si le premier user_message est clairement une réponse à quelque chose
+      const firstMsgIsReply = firstUserMsg.length > 3 && (
+        /^(oui|ouais|yes|ok|ah|merci|grave|exact|carrément|non|nan|bof|intéress|c.?est quoi|de quoi|genre|en mode|comment|pourquoi|pk|jsp|je sais|trop|ah ouais)/i.test(firstUserMsg)
+        || /^(mdr|lol|haha|ptdr|wsh|wesh)/i.test(firstUserMsg)
+        || (/\?/.test(firstUserMsg) && firstUserMsg.length < 40)
+        || firstUserMsg.length > 15 // un premier msg long = il répond à quelque chose
+      );
+      const firstMsgIsColdGreeting = /^(salut|salam|hey|yo|wesh|wsh|hello|bonjour|bonsoir|cc|coucou|sa va|ça va|cv)[\s!?.]*$/i.test(firstUserMsg);
+      if (firstMsgIsReply && !firstMsgIsColdGreeting) {
+        isOutbound = true;
+        console.log(`[V70.1] 📤 OUTBOUND AUTO-DÉTECTÉ: premier msg "${firstUserMsg.substring(0, 40)}" = réponse`);
+      }
+    }
+    // 3. Si n === 0 (tout premier msg) — heuristique sur le message ACTUEL
+    if (!isOutbound && history.length === 0) {
+      const currentLow = (userMessage || '').toLowerCase().trim();
+      const isCold = /^(salut|salam|hey|yo|wesh|wsh|hello|bonjour|bonsoir|cc|coucou|sa va|ça va|cv)[\s!?.]*$/i.test(currentLow);
+      const isReply = currentLow.length > 8 || /\?/.test(currentLow) || /ouais|oui|non|nan|grave|exact|carrément|ah|ok|genre|c.?est quoi|comment|pourquoi|de quoi|merci|intéress/i.test(currentLow);
+      if (!isCold && isReply) {
+        isOutbound = true;
+        console.log(`[V70.1] 📤 OUTBOUND HEURISTIQUE: msg "${currentLow.substring(0, 40)}" ≠ salut froid`);
+        // Sauvegarder le flag pour les prochains messages
+        await supabase.from('conversation_history').insert({ platform, user_id: userId, user_message: '//outbound-auto', bot_response: '__OUTBOUND__', created_at: new Date().toISOString() });
+      }
+    }
+    if (isOutbound) console.log(`[V70.1] 📤 OUTBOUND MODE ACTIF pour ${userId}`);
 
     const allPending = await getPendingMessages(platform, userId, new Date(new Date().getTime() - 60000).toISOString()); // Get all pending from last minute
     const pendingMessages = allPending.map((p: any) => p.user_message);
