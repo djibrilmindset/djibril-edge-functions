@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V70.2 — V70.1 + VARIATION OUVERTURE + ZÉRO "..." + ZÉRO SALUT RÉPÉTÉ + PHRASES COMPLÈTES + EMPATHIE ===
+// === V70.3 — OUTBOUND=DROIT AU BUT + INBOUND=INTRINSÈQUE + ADAPTE RYTHME PROSPECT ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -742,7 +742,9 @@ function getPhase(history: any[], msg: string, isDistress: boolean, mem: Prospec
   if (qual === 'low_budget') return { phase: 'DÉSENGAGER', n, trust, funnel, offerPitched, qual };
   const wantsCalendly = /\b(calendly|rdv|rendez|appel|call|réserv|book)\b/i.test(m);
   const wantsAction = /\b(audit|accompagn|programme|coaching|je veux bosser|ton offre|proposes quoi|acheter|payer|investir|je veux commencer)\b/i.test(m);
-  if (wantsCalendly || (wantsAction && trust >= 3)) {
+  // V70.3: Détecte si le prospect veut aller DROIT AU BUT (inbound ou outbound)
+  const wantsDirect = /\b(c.?est quoi (ton|l.?)|montre|dis.?moi direct|concrètement|en gros|résume|viens.?en au fait|propose|solution|comment (ça|tu)|j.?veux savoir|explique)\b/i.test(m);
+  if (wantsCalendly || (wantsAction && trust >= 3) || (wantsDirect && n >= 2 && trust >= 2)) {
     if (funnel.funnelStep === 'NEED_VALEUR') return { phase: 'ENVOYER_VALEUR', n, trust, funnel, offerPitched, qual };
     if (funnel.funnelStep === 'NEED_LANDING') return { phase: 'ENVOYER_LANDING', n, trust, funnel, offerPitched, qual };
     return { phase: 'ENVOYER_CALENDLY', n, trust, funnel, offerPitched, qual };
@@ -753,10 +755,21 @@ function getPhase(history: any[], msg: string, isDistress: boolean, mem: Prospec
     return { phase: 'ATTENTE_RETOUR', n, trust, funnel, offerPitched, qual };
   }
   if (offerPitched && funnel.funnelStep === 'NEED_CALENDLY') return { phase: 'CLOSER', n, trust, funnel, offerPitched, qual };
-  // V70.1: OUTBOUND PERSISTANT — si isOutbound=true (auto-détecté ou flag DB), rester en mode outbound plus longtemps
-  if (isOutbound && n <= 4) {
-    console.log(`[V70.1] 📤 OUTBOUND MODE — phase EXPLORER_OUTBOUND (n=${n})`);
-    return { phase: 'EXPLORER_OUTBOUND', n, trust: Math.max(trust, 2), funnel, offerPitched, qual };
+  // V70.3: OUTBOUND = DROIT AU BUT — le prospect n'a pas demandé à parler, il veut la solution direct
+  // n<=1: accueil outbound (1 question max), n>=2: proposer valeur IMMÉDIATEMENT
+  if (isOutbound) {
+    if (n <= 1) {
+      console.log(`[V70.3] 📤 OUTBOUND MODE — EXPLORER_OUTBOUND (n=${n})`);
+      return { phase: 'EXPLORER_OUTBOUND', n, trust: Math.max(trust, 2), funnel, offerPitched, qual };
+    }
+    // n>=2: accélérer vers PROPOSER_VALEUR si pas encore envoyé
+    if (funnel.funnelStep === 'NEED_VALEUR') {
+      console.log(`[V70.3] 📤 OUTBOUND → PROPOSER_VALEUR direct (n=${n})`);
+      return { phase: 'PROPOSER_VALEUR', n, trust: Math.max(trust, 3), funnel, offerPitched, qual };
+    }
+    // Sinon continuer le flow normal mais avec trust boosté
+    console.log(`[V70.3] 📤 OUTBOUND → flow normal accéléré (n=${n})`);
+  } else if (false) { // placeholder pour garder la structure
   }
   if (n === 0) return { phase: 'ACCUEIL', n, trust, funnel, offerPitched, qual };
   if (n <= 1) return { phase: 'EXPLORER', n, trust, funnel, offerPitched, qual };
@@ -976,15 +989,15 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
       maxChars = 60;
       break;
     case 'EXPLORER_OUTBOUND':
-      phaseInstr = `OUTBOUND: C'est TOI (Djibril) qui a DM ce prospect EN PREMIER. Rebondis sur SA réponse. 1 question liée. Décontracté.${profileBlock ? ' ' + profileBlock.trim() : ''}`;
-      maxChars = 80;
+      phaseInstr = `OUTBOUND: C'est TOI qui l'as DM. Il a PAS le temps, il a PAS demandé à parler. VA DROIT AU BUT. Rebondis sur sa réponse en 1 phrase puis enchaîne VITE vers ce que t'as à lui proposer. Pas de tour de chauffe, pas 10 questions — il veut savoir ce que t'as pour lui.${profileBlock ? ' ' + profileBlock.trim() : ''}`;
+      maxChars = 90;
       break;
     case 'EXPLORER':
-      phaseInstr = `EXPLORE SES DÉSIRS. "Tu veux quoi toi ?". Reprends SES mots. ULTRA COURT.`;
+      phaseInstr = `INBOUND: Il est venu vers toi. EXPLORE SES DÉSIRS. Fais-le réaliser par lui-même. "Tu veux quoi toi ?". Reprends SES mots. Si il veut aller droit au but, suis son rythme.`;
       maxChars = 80;
       break;
     case 'CREUSER':
-      phaseInstr = `CREUSE. "Qu'est-ce qui t'empêche ?". Reformule en 1 phrase. Montre que t'écoutes.${metierPainBlock}`;
+      phaseInstr = `CREUSE. Pose LA question qui le fait réaliser par lui-même. Reformule SES mots en 1 phrase. Montre que t'écoutes.${metierPainBlock}`;
       maxChars = 90;
       break;
     case 'RÉVÉLER':
@@ -1041,7 +1054,9 @@ DONNÉES DJIBRIL: 6700€/mois, 23 ans, seul, 14h/j. OFFRE: 5-10k en 80j pour LU
 RÈGLES ABSOLUES:
 - MESSAGES ULTRA COURTS: 1 phrase MAX. Parfois juste 3-4 mots suffisent. "Ah ouais carrément" c'est un message valide. T'es un mec qui répond sur son tel entre deux trucs, pas un mec qui rédige des paragraphes
 - ZÉRO VALEUR EN DM: Tu donnes RIEN dans les messages. Pas d'insight, pas de mécanisme, pas de leçon. La valeur = les LIENS uniquement
-- DÉSIR D'ABORD: "Tu veux quoi toi ?" avant "c'est quoi ton problème ?". Explore ce qu'il VEUT, pas ce qui va pas
+- INTRINSÈQUE: Pousse le mec à se rendre compte PAR LUI-MÊME. Pose la bonne question pour qu'il réalise. T'expliques pas, tu fais réaliser
+- ADAPTE-TOI AU RYTHME: Si le mec veut aller droit au but → donne-lui ce qu'il veut. Si il veut parler → écoute. Lis ce qu'il demande VRAIMENT. Sert à rien de tourner autour si il veut la solution direct
+- DÉSIR D'ABORD (INBOUND): "Tu veux quoi toi ?" avant "c'est quoi ton problème ?". Explore ce qu'il VEUT, pas ce qui va pas
 - REPRENDS SES MOTS: Utilise EXACTEMENT ses expressions, son vocabulaire, sa façon de dire les choses. Il doit se reconnaître
 - 1 QUESTION MAX par message. Jamais 2 questions. Jamais une question seule sans rebondir sur ce qu'il dit
 - SCAN TOTAL: Relis TOUTE la conv avant de répondre. Chaque msg doit être UNIQUE. Zéro répétition de mot, structure, idée
@@ -1055,6 +1070,7 @@ RÈGLES ABSOLUES:
 - PHRASE COMPLÈTE OBLIGATOIRE: Chaque phrase doit être FINIE. Jamais de phrase coupée, jamais de pensée incomplète. Si tu peux pas finir ta phrase → raccourcis la AVANT de l'écrire. Mieux vaut un message court et complet qu'un message long coupé au milieu
 - EMPATHIE RÉELLE: Cerne les ÉMOTIONS du mec. S'il est frustré, valide. S'il est perdu, rassure. S'il est motivé, surfe dessus. Tu SENS la personne, t'es pas un robot qui enchaîne les questions
 - RESPECT DU DÉSENGAGEMENT: Si le mec veut plus parler, force pas. Laisse un message ouvert et léger, pas de relance agressive. T'es détaché, pas désespéré
+- OUTBOUND ≠ INBOUND: Si c'est TOI qui l'as DM → il a pas le temps, va droit au but, propose vite. Si c'est LUI qui t'a DM → prends le temps, fais-le parler, explore. DEUX STYLES DIFFÉRENTS
 - "Adam" INTERDIT. JAMAIS de prix. ${salamRule}
 
 STYLE BANLIEUE: Contractions (j'sais, t'as, j'fais, y'a, j'capte ~50%). Simple. Respectueux mais proche. Pas un thug, un grand frère de quartier. Zéro émoji. Zéro point final. Zéro formatage. ZÉRO TROIS POINTS ("...") — jamais de "..." dans tes messages, c'est un tic de chatbot.
