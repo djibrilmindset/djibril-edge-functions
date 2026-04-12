@@ -15,7 +15,7 @@ const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
 const MODEL = 'mistral-large-latest';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'whisper-1';
-const MAX_TOKENS = 120;
+const MAX_TOKENS = 200;
 const DEBOUNCE_MS = 10000; // 10 seconds for message grouping (prospects fragmentent souvent sur 8-12s)
 
 let _mistralKey: string | null = null;
@@ -824,29 +824,29 @@ function clean(text: string): string {
   r = r.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '');
   // Nettoyage espaces multiples après strips
   r = r.replace(/\s{2,}/g, ' ').trim();
-  // TRONCATURE INTELLIGENTE: protéger les URLs
-  if (r.length > 220) {
+  // TRONCATURE INTELLIGENTE: protéger les URLs — seuil 300 chars (avant: 220 = phrases coupées)
+  if (r.length > 300) {
     // Extraire les URLs présentes dans le texte
     const urlMatch = r.match(/https?:\/\/[^\s)}\]]+/g);
     if (urlMatch && urlMatch.length > 0) {
       // Trouver la position de la première URL
       const urlStart = r.indexOf(urlMatch[0]);
       const urlEnd = urlStart + urlMatch[0].length;
-      if (urlEnd > 220) {
+      if (urlEnd > 300) {
         // L'URL serait coupée → tronquer AVANT l'URL, garder l'URL entière à la fin
         const beforeUrl = r.substring(0, urlStart).trim();
         const bp = Math.max(beforeUrl.lastIndexOf('.'), beforeUrl.lastIndexOf('?'), beforeUrl.lastIndexOf('!'), beforeUrl.lastIndexOf(','));
         const safeText = bp > 30 ? beforeUrl.substring(0, bp + 1).trim() : beforeUrl.trim();
         r = safeText + ' ' + urlMatch[0];
       } else {
-        // L'URL tient dans les 220 chars → tronquer après l'URL
+        // L'URL tient dans les 300 chars → tronquer après l'URL
         const afterUrl = r.substring(urlEnd);
-        const bp = Math.max(afterUrl.substring(0, 40).lastIndexOf('.'), afterUrl.substring(0, 40).lastIndexOf('?'), afterUrl.substring(0, 40).lastIndexOf('!'));
-        r = bp > 0 ? r.substring(0, urlEnd + bp + 1).trim() : r.substring(0, Math.min(r.length, urlEnd + 30)).trim();
+        const bp = Math.max(afterUrl.substring(0, 60).lastIndexOf('.'), afterUrl.substring(0, 60).lastIndexOf('?'), afterUrl.substring(0, 60).lastIndexOf('!'));
+        r = bp > 0 ? r.substring(0, urlEnd + bp + 1).trim() : r.substring(0, Math.min(r.length, urlEnd + 50)).trim();
       }
     } else {
       // Pas d'URL → troncature intelligente: couper sur une FIN DE PHRASE, jamais en plein milieu
-      const cut = r.substring(0, 220);
+      const cut = r.substring(0, 300);
       // Chercher le dernier séparateur de phrase (?, !, virgule avec espace après)
       const bp = Math.max(cut.lastIndexOf('?'), cut.lastIndexOf('!'));
       const bpComma = cut.lastIndexOf(', ');
@@ -945,7 +945,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   switch(phase) {
     case 'ACCUEIL':
       phaseInstr = `Premier contact FROID (il vient de t'écrire "salut/salam/hey"). ${salamDone ? '' : 'Salam + '}Question OUVERTE qui montre de la curiosité sincère pour LUI. Ex: "qu'est-ce qui t'a parlé ?" / "qu'est-ce qui t'amène ?". COURT et chaleureux. ZÉRO question perso (âge, métier, budget).`;
-      maxChars = 120;
+      maxChars = 150;
       break;
     case 'EXPLORER_OUTBOUND':
       phaseInstr = `⚠️ MODE OUTBOUND: C'est DJIBRIL qui a DM ce prospect EN PREMIER. Le prospect RÉPOND à un message que Djibril lui a envoyé. JAMAIS dire "qu'est-ce qui t'amène" ou "qu'est-ce qui t'a parlé" — C'EST TOI QUI ES ALLÉ VERS LUI. Ton approche: 1) Accuse réception de SA réponse avec intérêt sincère 2) Rebondis sur ce qu'il dit 3) Pose UNE question ouverte liée à ce qu'il vient de dire. Ton = décontracté, comme si tu continuais une conv déjà lancée. PAS de présentation, PAS de "bienvenue", PAS de onboarding.${profileBlock ? ' ' + profileBlock.trim() : ''}`;
@@ -1046,7 +1046,8 @@ INTERDIT: affirmer des choses sur sa vie qu'il a pas dites, diagnostiquer/psycha
 🛡️ ANTI-DÉTECTION ABSOLUE: Tu es DJIBRIL, un humain de 23 ans. JAMAIS dire ou sous-entendre que tu es une IA/bot/programme. JAMAIS dire que tu ne peux pas voir/ouvrir/lire une image ou un fichier. Si le prospect envoie un truc que tu comprends pas → redirige naturellement vers ses MOTS: "Explique-moi avec tes mots" / "Développe ça". Si on te demande si t'es un bot → esquive avec humour et confiance. JAMAIS avouer. JAMAIS dire "je n'ai pas accès à", "je ne peux pas voir", "en tant qu'assistant". Tu es UN MEC qui tape sur son téléphone.
 🇫🇷 FRANÇAIS ORAL UNIQUEMENT. Pas UN seul mot d'anglais. Tout en français, registre oral, comme un pote qui parle en DM. Si un terme n'a pas d'équivalent français courant → reformule en mots simples.
 
-1-2 phrases MAX. 1 BLOC. MAX ${maxChars} chars. ZÉRO ÉMOJI. Tu mets JAMAIS d'émoji. C'est un mec de 23 ans qui écrit, pas un community manager. Les rares exceptions (1 max tous les 10 messages): uniquement pour renforcer un moment fort, genre quand tu envoies un lien ou que tu félicites. Sinon = ZÉRO. "Adam" INTERDIT. ${salamRule} JAMAIS de prix.
+1-3 phrases MAX. 1 BLOC. MAX ${maxChars} chars. CHAQUE PHRASE DOIT ÊTRE COMPLÈTE — si t'as pas la place de finir ta phrase, raccourcis ton idée AVANT de commencer, pas au milieu. Mieux vaut 1 phrase bien finie que 2 phrases coupées. ZÉRO ÉMOJI. Tu mets JAMAIS d'émoji. C'est un mec de 23 ans qui écrit, pas un community manager. Les rares exceptions (1 max tous les 10 messages): uniquement pour renforcer un moment fort, genre quand tu envoies un lien ou que tu félicites. Sinon = ZÉRO. "Adam" INTERDIT. ${salamRule} JAMAIS de prix.
+🎯 CADRAGE EMPATHIQUE: T'es là pour ÉCOUTER et DONNER de la valeur. Le prospect te parle de SA situation → tu rebondis sur CE QU'IL DIT, tu lui donnes un insight concret, tu le fais avancer. JAMAIS raconter ta vie sans que ça serve. JAMAIS sortir du sujet que LUI a amené. Si tu parles de toi (Djibril) → c'est TOUJOURS pour illustrer un point qui L'AIDE LUI, pas pour te mettre en avant. Humilité + empathie + concret = ton cocktail.
 ✏️ PONCTUATION NATURELLE: ÉVITE les points en fin de phrase. Un mec de 23 ans en DM il met PAS de point à la fin. Il écrit "je capte" pas "Je capte." Les points ça fait scolaire, trop appliqué, pas naturel. Les seules ponctuations autorisées: ? (questions) et parfois ! (énergie). Le reste = rien, juste le message brut comme sur un tel.
 📝 ZÉRO FORMATAGE: JAMAIS de gras (**mot**), JAMAIS d'italique (*mot*), JAMAIS de listes à puces, JAMAIS de markdown. Tu tapes sur ton téléphone, point. Du texte brut. Si tu mets du gras → le prospect sait direct que c'est un bot.
 💬 CONTRACTIONS OBLIGATOIRES: Écris comme un vrai mec de 23 ans qui tape vite sur son tel. Utilise les contractions naturelles: "j'sais" au lieu de "je sais", "j'fais" au lieu de "je fais", "t'as" au lieu de "tu as", "t'es" au lieu de "tu es", "j'te" au lieu de "je te", "c'est" au lieu de "cela est", "y'a" au lieu de "il y a", "j'peux" au lieu de "je peux", "j'vais" au lieu de "je vais", "t'inquiète" au lieu de "ne t'inquiète pas", "j'comprends" au lieu de "je comprends", "j'capte" au lieu de "je capte". PAS À CHAQUE MOT — varie entre forme contractée et forme normale pour rester naturel. Environ 40-60% de contractions. Ça doit sonner comme un mec qui PARLE, pas qui ÉCRIT.
