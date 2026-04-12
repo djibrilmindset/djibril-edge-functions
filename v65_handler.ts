@@ -847,10 +847,9 @@ function clean(text: string): string {
     } else {
       // Pas d'URL → troncature intelligente: couper sur une FIN DE PHRASE, jamais en plein milieu
       const cut = r.substring(0, 300);
-      // Chercher le dernier séparateur de phrase (?, !, virgule avec espace après)
+      // Chercher le dernier séparateur de phrase (? ou ! UNIQUEMENT — pas virgule, ça fait coupé)
       const bp = Math.max(cut.lastIndexOf('?'), cut.lastIndexOf('!'));
-      const bpComma = cut.lastIndexOf(', ');
-      const bestBreak = bp > 40 ? bp : (bpComma > 40 ? bpComma : -1);
+      const bestBreak = bp > 40 ? bp : -1;
       if (bestBreak > 40) {
         r = r.substring(0, bestBreak + 1).trim();
       } else {
@@ -864,9 +863,19 @@ function clean(text: string): string {
   // Si le message finit par un mot de liaison/transition → phrase incomplète, on coupe avant
   const trailingIncomplete = /\b(que|qui|les|des|un|une|le|la|de|du|et|ou|mais|car|si|ce|cette|ces|son|sa|ses|mon|ma|mes|ton|ta|tes|pour|dans|sur|par|avec|est|sont|a|ont|fait|être|avoir|quand|comme|où|dont)\s*$/i;
   if (trailingIncomplete.test(r)) {
-    const lastSafe = Math.max(r.lastIndexOf('?'), r.lastIndexOf('!'), r.lastIndexOf(', '));
+    // Couper sur ? ou ! UNIQUEMENT — jamais sur virgule (ça fait phrase incomplète)
+    const lastSafe = Math.max(r.lastIndexOf('?'), r.lastIndexOf('!'));
     if (lastSafe > 30) r = r.substring(0, lastSafe + 1).trim();
+    else {
+      // Pas de ? ou ! → couper sur le dernier espace avant un mot complet
+      const lastSpace = r.substring(0, r.length - 10).lastIndexOf(' ');
+      if (lastSpace > 30) r = r.substring(0, lastSpace).trim();
+    }
   }
+  // ANTI-VIRGULE FINALE: un message qui finit par une virgule = phrase incomplète = bot détecté
+  r = r.replace(/[,;:\-–—]\s*$/, '').trim();
+  // ANTI-POINT FINAL: un mec de 23 ans met pas de point à la fin en DM
+  r = r.replace(/\.\s*$/, '').trim();
   return r;
 }
 
