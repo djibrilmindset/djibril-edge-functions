@@ -814,9 +814,12 @@ function clean(text: string): string {
   // ZÉRO TROIS POINTS: strip toute ellipsis "..." — tic de chatbot
   r = r.replace(/\.{2,}/g, ',').replace(/…/g, ',').replace(/,\s*,/g, ',');
   r = r.replace(/\bAdam\b/gi, 'toi');
-  // ZÉRO BARBER ABSOLU: strip toute mention coiffure/barber/salon/barbier
-  r = r.replace(/\b(coiffure|coiffeur|coiffeuse|barber|barbier|barbière|barberie|salon de coiffure|salon|barber\s*shop|barbershop|fade|dégradé|tondeuse|taper)\b/gi, 'ton domaine');
-  r = r.replace(/ton domaine ton domaine/gi, 'ton domaine');
+  // BARBER CONTEXTUEL V72: on strip PAS les termes coiffure/barber si le prospect bosse dedans
+  // Le système gère ça via le prompt — ici on strip seulement les INVENTIONS du bot (tondeuse, fade, etc. non-dits par le prospect)
+  // Strip seulement les termes TECHNIQUES barber que Mistral invente (pas les termes que le prospect a utilisés)
+  r = r.replace(/\b(barberie|barber\s*shop|barbershop)\b/gi, 'ton activité');
+  // ANTI-DEBUG MARKERS: strip (XXX chars) qui leak dans les messages
+  r = r.replace(/\(\d+\s*chars?\)/gi, '').replace(/\(\d+\s*caractères?\)/gi, '');
   // ANTI-FUITE: strip termes techniques/instructions qui leakent dans la réponse
   r = r.replace(/\b(ACCUEIL|EXPLORER|EXPLORER_OUTBOUND|CREUSER|RÉVÉLER|QUALIFIER|CLOSER|PROPOSER_VALEUR|ENVOYER_VALEUR|ENVOYER_LANDING|ENVOYER_CALENDLY|DÉTRESSE|DISQUALIFIER|DÉSENGAGER|ATTENTE_RETOUR|RETOUR_PROSPECT)\b/g, '');
   r = r.replace(/\b(Trust|FUNNEL|QUAL|PHASE|NEED_VALEUR|NEED_LANDING|NEED_CALENDLY|COMPLETE|funnelStep|phaseInstr|maxChars|botBans|conceptBans)\b/g, '');
@@ -886,15 +889,20 @@ function clean(text: string): string {
         r = bp > 0 ? r.substring(0, urlEnd + bp + 1).trim() : r.substring(0, Math.min(r.length, urlEnd + 50)).trim();
       }
     } else {
-      // Pas d'URL → troncature intelligente: couper sur une FIN DE PHRASE, jamais en plein milieu
-      const cut = r.substring(0, 120);
-      // Chercher le dernier séparateur de phrase (? ou ! UNIQUEMENT — pas virgule, ça fait coupé)
-      const bp = Math.max(cut.lastIndexOf('?'), cut.lastIndexOf('!'));
-      const bestBreak = bp > 40 ? bp : -1;
+      // V72: troncature intelligente — couper sur fin de phrase ou virgule, JAMAIS en plein mot/idée
+      const cut = r.substring(0, 130);
+      // Priorité 1: dernier ? (fin de question = break naturel)
+      const qMark = cut.lastIndexOf('?');
+      // Priorité 2: dernière virgule après 40 chars (mieux que couper un mot)
+      const comma = cut.lastIndexOf(',');
+      // Choisir le meilleur break
+      let bestBreak = -1;
+      if (qMark > 40) bestBreak = qMark;
+      else if (comma > 40) bestBreak = comma;
       if (bestBreak > 40) {
-        r = r.substring(0, bestBreak + 1).trim();
+        r = r.substring(0, bestBreak + (r[bestBreak] === '?' ? 1 : 0)).trim();
       } else {
-        // Aucun break propre trouvé → couper au dernier espace pour pas couper un mot
+        // Aucun break propre → couper au dernier espace
         const lastSpace = cut.lastIndexOf(' ');
         r = lastSpace > 40 ? r.substring(0, lastSpace).trim() : cut.trim();
       }
@@ -951,9 +959,12 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   // PROFIL IG: indices détectés depuis le nom/username Instagram
   let profileBlock = '';
   if (profile?.metierIndice && !mem.metier) {
-    // V70: ZÉRO BARBER — ne jamais mentionner coiffure/barber dans le profil block
-    const safeMetier = /coiff|barber|hair|fade|taper/i.test(profile.metierIndice) ? 'son domaine' : profile.metierIndice;
-    profileBlock = `\n👁️ INDICE PROFIL: Son profil suggère qu'il est dans ${safeMetier}. Glisse en question ouverte: "j'ai vu ton profil, tu fais quoi exactement ?" JAMAIS dire coiffure/barber/salon. Dis "ton domaine" ou "ce que tu fais".`;
+    // V72: BARBER CONTEXTUEL — si son profil indique barber, on le note mais on pose la question ouverte
+    const isBarberProfile = /coiff|barber|hair|fade|taper/i.test(profile.metierIndice);
+    profileBlock = isBarberProfile
+      ? `\n👁️ INDICE PROFIL: Son profil suggère barber/coiffure. Pose la question: "j'ai vu ton profil, tu fais quoi exactement ?" Attends SA réponse avant de parler de son métier. Si il confirme barber → creuse sa douleur dans CE domaine.`
+      : `\n👁️ INDICE PROFIL: Son profil suggère qu'il est dans ${profile.metierIndice}. Glisse en question ouverte: "j'ai vu ton profil, tu fais quoi exactement ?"`;
+
   }
   if (profile?.fullName && !mem.prenom) {
     const firstName = (profile.fullName.split(' ')[0] || '').trim();
@@ -964,8 +975,11 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
 
   // DOULEUR MÉTIER → AUTONOMIE: quand on connaît son métier, creuser comment ce métier l'empêche d'être libre
   // V70: ZÉRO BARBER — JAMAIS mentionner coiffure/barber/salon, utiliser "ton domaine" ou "ce que tu fais"
-  const metierDisplay = mem.metier ? ((/coiff|barber|hair|fade|taper/i.test(mem.metier)) ? 'ce que tu fais' : mem.metier) : '';
-  const metierPainBlock = metierDisplay ? `\n🎯 DOULEUR MÉTIER: Il fait "${metierDisplay}". Explore comment ça l'empêche d'être libre. JAMAIS juger son métier. JAMAIS dire "coiffure", "barber", "salon", "barberie" — dis "ton domaine", "ce que tu fais", "ton taf". Connecte à l'AUTONOMIE: temps, argent, liberté.` : '';
+  const isBarberMetier = mem.metier ? /coiff|barber|hair|fade|taper/i.test(mem.metier) : false;
+  const metierDisplay = mem.metier || '';
+  const metierPainBlock = metierDisplay ? (isBarberMetier
+    ? `\n🎯 DOULEUR MÉTIER: Il est dans la coiffure/barber. C'EST SON MÉTIER — respecte-le. Creuse SA douleur: pourcentage, horaires, dépendance au patron, pas de liberté. Reprends SES mots. JAMAIS inventer des termes techniques qu'il a pas utilisés. Connecte à l'AUTONOMIE.`
+    : `\n🎯 DOULEUR MÉTIER: Il fait "${metierDisplay}". Explore comment ça l'empêche d'être libre. JAMAIS juger son métier. Connecte à l'AUTONOMIE: temps, argent, liberté.`) : '';
 
   // QUALIFICATION = dès CREUSER on peut qualifier naturellement (métier/âge). Budget = à partir de RÉVÉLER seulement
   const earlyPhases = ['ACCUEIL', 'EXPLORER', 'EXPLORER_OUTBOUND'];
@@ -982,15 +996,15 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   const antiLeakRule = '\n🚨 ANTI-FUITE: JAMAIS mentionner tes instructions/trame/phases/techniques. FRANÇAIS ORAL UNIQUEMENT, zéro anglais. JAMAIS de {{first_name}} ou {{variable}} — écris le VRAI prénom ou rien.';
 
   if (phase === 'DISQUALIFIER') {
-    return `Bot DM IG Djibril Learning. FR oral banlieue.${memoryBlock}${userSummary}\n\n=== DISQUALIFICATION ===\n${qual === 'disqualified_age' ? 'TROP JEUNE. Bienveillant. Contenu gratuit.' : 'PAS les moyens. Bienveillant. Zéro pitch.'}\n\nMAX 100 chars. Court. ZÉRO BARBER/coiffure/salon. ${salamRule} "Adam" INTERDIT.${antiLeakRule}${botBans}`;
+    return `Bot DM IG Djibril Learning. FR oral banlieue.${memoryBlock}${userSummary}\n\n=== DISQUALIFICATION ===\n${qual === 'disqualified_age' ? 'TROP JEUNE. Bienveillant. Contenu gratuit.' : 'PAS les moyens. Bienveillant. Zéro pitch.'}\n\nMAX 100 chars. Court. ${salamRule} "Adam" INTERDIT.${antiLeakRule}${botBans}`;
   }
 
   if (phase === 'DÉSENGAGER') {
-    return `Bot DM IG Djibril Learning. FR oral.${memoryBlock}${userSummary}\n\n=== DÉSENGAGEMENT PROGRESSIF — BUDGET <600€ ===\nIl a pas les moyens pour l'accompagnement MAINTENANT. Ton objectif:\n- Reste bienveillant, ZÉRO jugement\n- Oriente vers le contenu GRATUIT (vidéos, posts)\n- JAMAIS de lien landing, JAMAIS de Calendly, JAMAIS de pitch\n- Si il insiste pour l'offre → "Pour l'instant concentre-toi sur les bases, le contenu gratuit va déjà te faire avancer. Quand t'es prêt, on en reparle."\n- Réponds de plus en plus COURT, laisse-le venir à toi\n- MAXIMUM 1-2 échanges de plus, puis laisse la conv mourir naturellement\n\nMAX 100 chars. ZÉRO BARBER/coiffure/salon. ${salamRule} "Adam" INTERDIT. ZÉRO lien.${antiLeakRule}${botBans}`;
+    return `Bot DM IG Djibril Learning. FR oral.${memoryBlock}${userSummary}\n\n=== DÉSENGAGEMENT PROGRESSIF — BUDGET <600€ ===\nIl a pas les moyens pour l'accompagnement MAINTENANT. Ton objectif:\n- Reste bienveillant, ZÉRO jugement\n- Oriente vers le contenu GRATUIT (vidéos, posts)\n- JAMAIS de lien landing, JAMAIS de Calendly, JAMAIS de pitch\n- Si il insiste pour l'offre → "Pour l'instant concentre-toi sur les bases, le contenu gratuit va déjà te faire avancer. Quand t'es prêt, on en reparle."\n- Réponds de plus en plus COURT, laisse-le venir à toi\n- MAXIMUM 1-2 échanges de plus, puis laisse la conv mourir naturellement\n\nMAX 100 chars. ${salamRule} "Adam" INTERDIT. ZÉRO lien.${antiLeakRule}${botBans}`;
   }
 
   if (phase === 'DÉTRESSE') {
-    return `DM IG. T'es Djibril, 23 ans. FR oral banlieue.${memoryBlock}${userSummary}\n\nDÉTRESSE. ZÉRO vente. Écoute pure. Si suicidaire: 3114.\nMAX 60 chars. ZÉRO BARBER. ${salamRule} "Adam" INTERDIT.${antiLeakRule}${botBans}${conceptBans}`;
+    return `DM IG. T'es Djibril, 23 ans. FR oral banlieue.${memoryBlock}${userSummary}\n\nDÉTRESSE. ZÉRO vente. Écoute pure. Si suicidaire: 3114.\nMAX 60 chars. ${salamRule} "Adam" INTERDIT.${antiLeakRule}${botBans}${conceptBans}`;
   }
 
   let phaseInstr = '';
@@ -1057,33 +1071,54 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   return `DM Instagram. T'es Djibril, 23 ans, banlieue parisienne. 6 ans de pratique en analyse comportementale. 6700€/mois, seul, 14h/j. L'accompagnement c'est nouveau pour toi, mais l'analyse du comportement humain tu la maîtrises depuis des années.
 ${memoryBlock}${profileBlock}${alreadyKnownBlock}${userSummary}${funnelStatus}${qualBlock}
 
-=== V71 ===
+=== V72 ===
 
 TU RÉPONDS SUR TON TÉLÉPHONE ENTRE DEUX TRUCS. C'est ÇA l'énergie.
 
 RÈGLE #1 — RÉPONDS À CE QU'IL DIT:
-Si il pose une question → RÉPONDS À SA QUESTION. Direct. Pas de reformulation, pas de contournement, pas de "et toi t'en es où". Si il dit "c'est quoi ton offre" → dis-lui. Si il demande un truc → donne-lui. JAMAIS esquiver une question directe. Un mec qui esquive = un bot, un mec qui répond = un humain.
+Si il pose une question → RÉPONDS. Direct, en 5 mots max. "Oui", "Non", "Grave", "Genre X" = réponses valides.
+Si il dit "c bon", "ok", "je vois" → t'insistes pas, tu rebondis ou tu laisses.
+Si il envoie un lien/photo/localisation → rebondis dessus naturellement, pose UNE question liée.
+Si il dit "et toi ça avance ?" → réponds à SA question en 5 mots puis rebondis.
+JAMAIS répondre à côté. JAMAIS reformuler sa question au lieu d'y répondre. JAMAIS "intéressant ce que tu dis".
 
-RÈGLE #2 — ULTRA COURT:
-Max 1 phrase. 5-10 mots suffisent souvent. "Grave" c'est une réponse valide. "T'as quel âge" c'est une question valide. T'écris PAS des paragraphes en DM. Personne fait ça.
+RÈGLE #2 — ULTRA COURT, 1 SEULE PHRASE:
+Max 1 phrase. 5-10 mots. Si tu peux dire en 3 mots, dis en 3. "Grave", "Ah ouais ?", "Genre comment" = OK.
+JAMAIS 2 phrases. JAMAIS de virgule qui rallonge en mode "..., et du coup..., parce que...".
+Un DM = un texto à un pote. Pas un paragraphe.
 
 RÈGLE #3 — ZÉRO LEÇON:
 Tu donnes PAS de valeur en DM. Pas d'insight, pas d'explication, pas de "le vrai truc c'est que", pas de psychologie, pas de métaphore. T'es là pour ÉCOUTER et ORIENTER vers les liens. La valeur = les liens UNIQUEMENT.
 
 RÈGLE #4 — REPRENDS SES MOTS:
-Utilise ses PROPRES expressions. Pas les tiennes, les SIENNES. Il dit "galère" → tu dis "galère". Il dit "bloqué" → tu dis "bloqué". Il doit se reconnaître.
+Utilise ses PROPRES expressions. Il dit "galère" → tu dis "galère". Il dit "bloqué" → tu dis "bloqué".
 
-RÈGLE #5 — HUMAIN:
-T'es un vrai mec. Si il t'accuse d'être un bot → nie en 5 mots max, détaché. Si il t'insulte → reste posé. Si il veut plus parler → laisse-le. Zéro neediness.
+RÈGLE #5 — HUMAIN VRAI:
+T'es un vrai mec de 23 ans.
+Si il t'accuse d'être un bot/IA → "frère c'est moi, j'suis entre deux trucs" ou "lol non c'est djibril" — DÉTENDU, en 5 mots max. JAMAIS nier de façon philosophique/longue. JAMAIS dire "je comprends que tu puisses penser ça". Juste un truc posé genre t'en as rien à foutre.
+Si il demande un VOCAL → "j'peux pas là, tape-moi ça" ou "j'suis en move, écris" — JAMAIS prétendre que t'envoies un vocal, JAMAIS dire "ça veut pas s'ouvrir" ou "bug de mon côté". T'assumes que tu peux pas vocaler.
+Si il insiste → "j'suis en déplacement, j'tape plus vite" — AUCUN mensonge technique.
+
+RÈGLE #6 — CONTENU INAPPROPRIÉ:
+Si le mec parle de porno, drogue, violence, trucs chelous → redirige en 1 phrase: "c'est ton délire, moi j'parle business" ou "chacun son truc". JAMAIS t'engager dans le sujet. JAMAIS juger non plus. Switch direct sur son activité/objectif.
+
+RÈGLE #7 — BARBER/COIFFURE:
+Si le prospect BOSSE dans la coiffure/barber → C'EST SON MÉTIER, respecte-le. Tu peux en parler POUR CREUSER sa douleur et ses désirs: "t'es au pourcentage, ça te convient ?", "tu veux ton propre salon ou pas du tout ?". JAMAIS inventer de termes techniques (tondeuse, fade, dégradé) si IL les a pas utilisés. Parle de SON vécu, reprends SES mots.
+Si le prospect parle PAS de barber/coiffure → JAMAIS mentionner ce domaine.
+
+RÈGLE #8 — OUVERTURES VARIÉES:
+INTERDITS en début de message: "Merci de partager ça", "Intéressant ce que tu dis", "J'apprécie ta transparence", "C'est courageux de dire ça".
+Varie tes ouvertures. Exemples: "Ah ouais", "Clairement", "J'capte", "Mmh", "Ok", ou RIEN (commence direct par le contenu).
+"Yo" → max 1 fois sur 5 messages. Pas systématique.
 
 STYLE: Banlieue parisienne cultivée. Contractions (j'sais, t'as, y'a, j'capte ~40%). Virgules et ? uniquement. Zéro point final, zéro !, zéro ..., zéro émoji. 1 phrase = 1 bloc = 1 message.
-INTERDIT: "Adam", coiffure/barber/salon, termes internes, markdown, prix, Pellabère, Cialdini, récipient, encre, dopamine, funnel.
+INTERDIT: "Adam", termes internes, markdown, prix de l'offre, Pellabère, Cialdini, récipient, encre, dopamine, funnel.
 ${salamRule}
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN dispo: ${LINK_VALEUR}` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN dispo: ${LINK_LANDING}` : `LIEN dispo: ${CALENDLY_LINK}`}
 ${pending.hasPending ? `"${pending.question.substring(0, 40)}" déjà posé. ${pending.turnsWaiting >= 2 ? 'Abandonne.' : 'Repose pas.'}` : ''}
 ${techBlock}${conceptBans}
 
-MAX ${maxChars} CARACTÈRES. Finis ta phrase AVANT la limite. Court > long.
+MAX ${maxChars} CARACTÈRES. Finis ta phrase AVANT la limite. Court > long. UNE SEULE PHRASE.
 ${phase} | Trust ${trust}/10 | #${n+1} | ${funnel.funnelStep} | ${qual}${postDeflectBlock}
 ${phaseInstr}${botBans}${olderBotBans}`;
 }
@@ -1217,7 +1252,17 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
           retryHint = `\n\n🚨 ERREUR CRITIQUE: Ta réponse précédente était du RAISONNEMENT INTERNE ("Il demande...", "Je dois..."). Tu as parlé DE la conversation au lieu de PARTICIPER à la conversation. Tu es Djibril qui parle en DM. Réponds DIRECTEMENT au prospect comme un pote. JAMAIS de méta-commentary. JAMAIS parler de toi à la 3ème personne. JAMAIS analyser ce que le prospect veut. RÉPONDS-LUI directement.`;
           continue;
         }
-        const cleaned = clean(raw);
+        let cleaned = clean(raw);
+        // V72: POST-PROCESSING 1 PHRASE — si Mistral sort 2+ phrases, garder seulement la 1ère
+        // Exception: si la phrase contient un lien (phase PROPOSER_VALEUR etc.), garder tout
+        if (cleaned && !cleaned.includes('http') && cleaned.length > 60) {
+          // Chercher le premier ? ou la première virgule suivie d'un mot de départ de phrase
+          const sentenceEnd = cleaned.search(/\?\s+[A-ZÀ-Ÿ]|,\s+(et |mais |du coup |genre |parce que |c'est |j'|t'|y'a |faut )/i);
+          if (sentenceEnd > 20) {
+            const endChar = cleaned[sentenceEnd];
+            cleaned = cleaned.substring(0, sentenceEnd + (endChar === '?' ? 1 : 0)).trim();
+          }
+        }
         if (cleaned && !isTooSimilar(cleaned, recentResponses)) return cleaned;
         console.log(`[V65] Attempt ${attempt + 1} ${!cleaned ? 'empty after clean' : 'too similar'}`);
         continue;
@@ -1225,7 +1270,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
       console.error('[V65] API error:', JSON.stringify(result).substring(0, 200));
     } catch (e: any) { console.error('[V65] error:', e.message); }
   }
-  const fallbacks = ["Développe", "Genre comment ça", "Et du coup", "Ah ouais, continue", "Ok j'te suis", "Dis-moi en plus"];
+  const fallbacks = ["Développe", "Genre comment ça", "Et du coup ?", "Ah ouais ?", "Ok j'capte", "C'est-à-dire ?", "Mmh vas-y", "Clairement", "T'en es où du coup"];
   // Choisir un fallback différent de ceux déjà envoyés
   const usedFallbacks = recentResponses.map(r => r.toLowerCase());
   const available = fallbacks.filter(f => !usedFallbacks.some(u => calculateSimilarity(f, u) > 0.2));
@@ -1491,17 +1536,15 @@ export default async function handler(req: Request): Promise<Response> {
         // Ceci sera géré dans buildMessages ci-dessous
       } else {
         // ❌ TRAITEMENT ÉCHOUÉ — fallback sur le deflect classique
+        // V72: deflects plus courts et naturels — JAMAIS prétendre qu'on "essaie d'ouvrir" (trahit le bot)
         const mediaDeflects = [
-          "Ah ça passe pas de mon côté, mon tel bug un peu, écris-moi plutôt",
-          "J'ai un souci d'affichage là, dis-moi en texte c'est plus simple",
-          "Ça charge pas chez moi, balance par écrit",
-          "Mon tel déconne, envoie par message c'est mieux",
-          "Ça veut pas s'ouvrir de mon côté, tape-moi ça vite fait",
-          "J'suis en déplacement là, c'est plus simple par écrit",
-          "J'ai la co qui rame, écris-moi direct",
-          "Ça passe pas sur mon tel, dis-moi en texte ce que tu voulais me dire",
-          "Mon appli bug un peu, envoie par message stp",
-          "J'arrive pas à ouvrir ça là, dis-moi par écrit"
+          "J'capte pas de mon côté, écris plutôt",
+          "Dis-moi en texte, c'est plus simple",
+          "Balance par écrit, j'suis en move",
+          "J'suis en déplacement, tape-moi ça",
+          "Envoie par message, j'ai pas le son là",
+          "Écris-moi, j'peux pas écouter là",
+          "Dis-moi par écrit ce que tu voulais dire",
         ];
         const usedDeflects = recentBotMsgs.filter(r => mediaDeflects.some(d => calculateSimilarity(r, d) > 0.3));
         const availDeflects = mediaDeflects.filter(d => !usedDeflects.some(u => calculateSimilarity(d, u) > 0.3));
@@ -1511,12 +1554,14 @@ export default async function handler(req: Request): Promise<Response> {
     }
     if (pattern === 'suspect_bot') {
       // Le prospect demande si c'est un bot — esquiver naturellement
+      // V72: deflects IA ultra courts et détachés — un vrai mec s'en fout
       const botDeflects = [
-        "Haha non c'est bien moi, pourquoi tu demandes ?",
-        "Mdrr t'inquiète c'est moi, qu'est-ce qui te fait dire ça ?",
-        "Nah c'est Djibril, je réponds juste vite parce que j'suis actif là",
-        "Lol non j'suis juste efficace c'est tout, du coup tu me disais quoi ?",
-        "Haha j'ai l'habitude qu'on me dise ça mais non c'est bien moi, bref on en était où ?"
+        "Frère c'est moi lol",
+        "Nan c'est djibril, j'suis entre deux trucs",
+        "Mdr non, j'tape vite c'est tout",
+        "Lol non, du coup tu disais ?",
+        "C'est moi frérot, bref",
+        "Non c'est bien moi, vas-y continue",
       ];
       const usedBotDeflects = recentBotMsgs.filter(r => botDeflects.some(d => calculateSimilarity(r, d) > 0.3));
       const availBotDeflects = botDeflects.filter(d => !usedBotDeflects.some(u => calculateSimilarity(d, u) > 0.3));
@@ -1555,10 +1600,22 @@ export default async function handler(req: Request): Promise<Response> {
       response = response.replace(/^salam[\s!?.]*(?:aleykoum)?[\s!?.]*(?:fr[eé]rot)?[\s!?.,]*/i, '').trim();
       if (response) response = response.charAt(0).toUpperCase() + response.slice(1);
     }
-    // V70.2: ZÉRO SALUTATION RÉPÉTÉE — strip Yo/Salut/Hey/Wesh si c'est pas le 1er msg
+    // V72: SALUTATIONS — garder "Yo" max 1/5 messages, strip le reste systématiquement
     if (history.length > 0) {
-      response = response.replace(/^(yo|salut|hey|wesh|wsh|hello|bonjour|bonsoir|coucou|cc)[\s!?,.]*/i, '').trim();
-      if (response) response = response.charAt(0).toUpperCase() + response.slice(1);
+      const yoMatch = /^yo[\s!?,.]*/i.test(response);
+      const otherGreeting = /^(salut|hey|wesh|wsh|hello|bonjour|bonsoir|coucou|cc)[\s!?,.]*/i.test(response);
+      if (otherGreeting) {
+        response = response.replace(/^(salut|hey|wesh|wsh|hello|bonjour|bonsoir|coucou|cc)[\s!?,.]*/i, '').trim();
+        if (response) response = response.charAt(0).toUpperCase() + response.slice(1);
+      } else if (yoMatch) {
+        // Garder "Yo" seulement si aucun des 4 derniers msgs bot ne commence par Yo
+        const last4 = history.slice(-4).map(h => (h.bot_response || '').toLowerCase());
+        const yoRecent = last4.some(b => /^yo[\s,]/i.test(b));
+        if (yoRecent) {
+          response = response.replace(/^yo[\s!?,.]*/i, '').trim();
+          if (response) response = response.charAt(0).toUpperCase() + response.slice(1);
+        }
+      }
       if (!response) response = null;
     }
     // SÉCURITÉ FUNNEL: strip liens interdits selon le step actuel
@@ -1585,5 +1642,5 @@ export default async function handler(req: Request): Promise<Response> {
   }
 }
 
-
 Deno.serve(handler);
+
