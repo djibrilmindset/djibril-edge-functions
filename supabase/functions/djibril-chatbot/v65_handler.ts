@@ -15,7 +15,7 @@ const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
 const MODEL = 'mistral-large-latest';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'whisper-1';
-const MAX_TOKENS = 50; // V71: ULTRA COURT — un mec tape pas des pavés en DM
+const MAX_TOKENS = 80; // V74: assez pour 1-2 phrases COMPLÈTES. Le system prompt limite déjà la longueur
 const DEBOUNCE_MS = 40000; // V74: 40s — setter premium, laisse le prospect finir TOUT ce qu'il a à dire
 
 let _mistralKey: string | null = null;
@@ -820,6 +820,14 @@ function clean(text: string): string {
   r = r.replace(/\b(barberie|barber\s*shop|barbershop)\b/gi, 'ton activité');
   // ANTI-DEBUG MARKERS: strip (XXX chars) qui leak dans les messages
   r = r.replace(/\(\d+\s*chars?\)/gi, '').replace(/\(\d+\s*caractères?\)/gi, '');
+  // V74 ANTI-COACH: strip les phrases motivationnelles génériques que Djibril dirait JAMAIS
+  r = r.replace(/le fait que tu \w+[^.?!,]{0,30}(ça |ca )(montre|prouve|veut dire)/gi, '');
+  r = r.replace(/(t.es|tu es) (sur la bonne voie|prêt|ready|capable|déjà là|en chemin)/gi, '');
+  r = r.replace(/(à ta portée|tout est possible|c.est un (premier |bon )?pas|t.as déjà (la |ta )réponse|tout à ton honneur|chapeau|bravo|je respecte (ça|ton))/gi, '');
+  r = r.replace(/(c.est courageux|ça demande du courage|t.es courageux|belle démarche|belle initiative)/gi, '');
+  r = r.replace(/(n.hésite pas|je suis là (pour|si)|tu peux compter sur|n.aie pas peur)/gi, '');
+  // Nettoyer si le strip a laissé des virgules/espaces en trop
+  r = r.replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ').trim();
   // ANTI-FUITE: strip termes techniques/instructions qui leakent dans la réponse
   r = r.replace(/\b(ACCUEIL|EXPLORER|EXPLORER_OUTBOUND|CREUSER|RÉVÉLER|QUALIFIER|CLOSER|PROPOSER_VALEUR|ENVOYER_VALEUR|ENVOYER_LANDING|ENVOYER_CALENDLY|DÉTRESSE|DISQUALIFIER|DÉSENGAGER|ATTENTE_RETOUR|RETOUR_PROSPECT)\b/g, '');
   r = r.replace(/\b(Trust|FUNNEL|QUAL|PHASE|NEED_VALEUR|NEED_LANDING|NEED_CALENDLY|COMPLETE|funnelStep|phaseInstr|maxChars|botBans|conceptBans)\b/g, '');
@@ -1172,8 +1180,9 @@ STYLE DJIBRIL RÉEL (extrait de ses vrais messages):
 - Ponctuation: virgules et ? uniquement. Zéro point final, zéro !, zéro ..., zéro émoji
 - Registre: cultivé MAIS oral — tu connais tes sujets mais tu parles comme un mec, pas comme un prof
 - TON: direct, tu commandes presque — "du coup t'en es où", pas "est-ce que tu pourrais me dire où tu en es"
-- JAMAIS: "Je comprends ta situation", "C'est un vrai challenge", "J'apprécie ta transparence", "C'est courageux", "Merci de partager"
-- À LA PLACE: "j'capte", "c'est chaud", "j'vois le délire", "ah ouais", "ok"
+- JAMAIS: "Je comprends ta situation", "C'est un vrai challenge", "J'apprécie ta transparence", "C'est courageux", "Merci de partager", "ça montre que t'es prêt", "t'es sur la bonne voie", "le fait que tu [verbe] ça montre que", "à ta portée", "c'est un premier pas", "t'as déjà la réponse en toi", "c'est tout à ton honneur", "je respecte ça", "chapeau", "bravo"
+- CES PHRASES = COACH MOTIVATIONNEL GÉNÉRIQUE. Djibril parle PAS comme ça. JAMAIS.
+- À LA PLACE: "j'capte", "c'est chaud", "j'vois le délire", "ah ouais", "ok", "grave", "c'est ça le truc"
 INTERDIT: "Adam", termes internes, markdown, prix de l'offre, Pellabère, Cialdini, récipient, encre, dopamine, funnel.
 ${salamRule}
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN dispo: ${LINK_VALEUR}` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN dispo: ${LINK_LANDING}` : `LIEN dispo: ${CALENDLY_LINK}`}
@@ -1315,14 +1324,18 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
           continue;
         }
         let cleaned = clean(raw);
-        // V72: POST-PROCESSING 1 PHRASE — si Mistral sort 2+ phrases, garder seulement la 1ère
-        // Exception: si la phrase contient un lien (phase PROPOSER_VALEUR etc.), garder tout
-        if (cleaned && !cleaned.includes('http') && cleaned.length > 60) {
-          // Chercher le premier ? ou la première virgule suivie d'un mot de départ de phrase
-          const sentenceEnd = cleaned.search(/\?\s+[A-ZÀ-Ÿ]|,\s+(et |mais |du coup |genre |parce que |c'est |j'|t'|y'a |faut )/i);
-          if (sentenceEnd > 20) {
-            const endChar = cleaned[sentenceEnd];
-            cleaned = cleaned.substring(0, sentenceEnd + (endChar === '?' ? 1 : 0)).trim();
+        // V74: POST-PROCESSING — on coupe SEULEMENT si c'est VRAIMENT 3+ phrases (pas 2)
+        // Le system prompt gère déjà la longueur. On intervient que si Mistral déraille
+        if (cleaned && !cleaned.includes('http') && cleaned.length > 140) {
+          // Chercher la fin de la 2ème phrase (pas la 1ère)
+          const firstBreak = cleaned.search(/[.!?]\s+[A-ZÀ-Ÿ]/);
+          if (firstBreak > 20) {
+            const afterFirst = cleaned.substring(firstBreak + 1);
+            const secondBreak = afterFirst.search(/[.!?]\s+[A-ZÀ-Ÿ]/);
+            if (secondBreak > 10) {
+              // 3+ phrases → garder les 2 premières
+              cleaned = cleaned.substring(0, firstBreak + 1 + secondBreak + 1).trim();
+            }
           }
         }
         if (cleaned && !isTooSimilar(cleaned, recentResponses)) return cleaned;
