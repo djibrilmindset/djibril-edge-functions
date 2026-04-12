@@ -12,10 +12,10 @@ const BOT_RESPONSE_FIELD_ID = 14462726;
 const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
-// V79: CLAUDE SONNET — cerveau principal (coût optimisé). Pixtral = images. Whisper = audio.
+// V81: CLAUDE SONNET — cerveau principal (coût optimisé). Pixtral = images. GPT-4o-mini-transcribe = audio.
 const MODEL = 'claude-sonnet-4-20250514';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
-const WHISPER_MODEL = 'whisper-1';
+const WHISPER_MODEL = 'gpt-4o-mini-transcribe'; // V81: remplace whisper-1 — ZÉRO hallucination
 const MAX_TOKENS = 80;
 const DEBOUNCE_MS = 20000;
 
@@ -199,21 +199,48 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
       console.log(`[V79] 🛑 Audio trop petit (${blobSize} bytes) → skip Whisper`);
       return null;
     }
-    // Envoyer à Whisper — V70.1: prompt hints FR oral/banlieue pour meilleure reconnaissance
+    // V81: gpt-4o-mini-transcribe — anti-hallucination natif + meilleure qualité FR oral
     const formData = new FormData();
     formData.append('file', audioBlob, 'audio.ogg');
     formData.append('model', WHISPER_MODEL);
     formData.append('language', 'fr');
     formData.append('response_format', 'text');
-    formData.append('prompt', "Conversation en français oral entre jeunes. Style banlieue, contractions: j'sais, t'as, j'fais, y'a, j'capte, wesh, frérot, le s, c'est chaud, grave, genre, en mode, le délire, tranquille, wallah, hamdoulilah, inchallah, starfoullah. Vocabulaire: business, mindset, argent, thune, oseille, biff, gagner sa vie, liberté, autonomie, bloquer, galérer, se lancer, entrepreneur, freelance, coiffeur, livreur, Uber, formation, accompagnement, coaching. Les gens parlent vite, avalent des syllabes, mélangent français et arabe.");
+    // V81: gpt-4o-mini-transcribe utilise 'instructions' au lieu de 'prompt'
+    const transcriptionHint = "Conversation en français oral entre jeunes. Style banlieue, contractions: j'sais, t'as, j'fais, y'a, j'capte, wesh, frérot, le s, c'est chaud, grave, genre, en mode, le délire, tranquille, wallah, hamdoulilah, inchallah, starfoullah. Vocabulaire: business, mindset, argent, thune, oseille, biff, gagner sa vie, liberté, autonomie, bloquer, galérer, se lancer, entrepreneur, freelance, coiffeur, livreur, Uber, formation, accompagnement, coaching.";
+    // gpt-4o-mini-transcribe: 'instructions' param. Whisper fallback: 'prompt' param.
+    if (WHISPER_MODEL.startsWith('gpt-4o')) {
+      formData.append('instructions', transcriptionHint);
+    } else {
+      formData.append('prompt', transcriptionHint);
+    }
     const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${openaiKey}` },
       body: formData,
     });
-    if (!whisperResponse.ok) { console.log(`[V69] Whisper error: ${whisperResponse.status}`); return null; }
+    if (!whisperResponse.ok) {
+      const errBody = await whisperResponse.text().catch(() => '');
+      console.log(`[V81] Transcription error: ${whisperResponse.status} ${errBody.substring(0, 200)}`);
+      // V81 FALLBACK: si gpt-4o-mini-transcribe échoue, tenter whisper-1
+      if (WHISPER_MODEL.startsWith('gpt-4o')) {
+        console.log(`[V81] ⚠️ Fallback → whisper-1`);
+        const fb = new FormData();
+        fb.append('file', audioBlob, 'audio.ogg');
+        fb.append('model', 'whisper-1');
+        fb.append('language', 'fr');
+        fb.append('response_format', 'text');
+        fb.append('prompt', transcriptionHint);
+        const fbResp = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { 'Authorization': `Bearer ${openaiKey}` }, body: fb });
+        if (!fbResp.ok) { console.log(`[V81] Whisper-1 fallback aussi échoué: ${fbResp.status}`); return null; }
+        const fbText = (await fbResp.text()).trim();
+        console.log(`[V81] 🎤 Whisper-1 fallback: "${fbText.substring(0, 100)}" (${blobSize} bytes)`);
+        if (isWhisperHallucination(fbText, blobSize)) { console.log(`[V81] 🛑 HALLUCINATION fallback`); return null; }
+        return fbText || null;
+      }
+      return null;
+    }
     const transcription = (await whisperResponse.text()).trim();
-    console.log(`[V79] 🎤 Whisper transcription: "${transcription.substring(0, 100)}" (${blobSize} bytes)`);
+    console.log(`[V81] 🎤 Transcription: "${transcription.substring(0, 100)}" (${blobSize} bytes, model=${WHISPER_MODEL})`);
     // V78: Vérifier si c'est une hallucination
     if (isWhisperHallucination(transcription, blobSize)) {
       console.log(`[V79] 🛑 HALLUCINATION DÉTECTÉE → transcription ignorée`);
@@ -907,12 +934,34 @@ function clean(text: string): string {
   r = r.replace(/(à ta portée|tout est possible|c.est un (premier |bon )?pas|t.as déjà (la |ta )réponse|tout à ton honneur|chapeau|bravo|je respecte (ça|ton))/gi, '');
   r = r.replace(/(c.est courageux|ça demande du courage|t.es courageux|belle démarche|belle initiative)/gi, '');
   r = r.replace(/(n.hésite pas|je suis là (pour|si)|tu peux compter sur|n.aie pas peur)/gi, '');
-  // V80 ANTI-MANIÈRES: strip les phrases faux-empathiques/maniérées
-  r = r.replace(/(j.?suis curieux c.?est tout|c.?est tout|j.?te juge pas|je te juge pas|j.?comprends (que tu|ta|ton)|je comprends (que tu|ta|ton)|c.?est normal de|t.?as raison de|j.?respecte (ça|ton|ta)|t.?es méfiant|ta méfiance)/gi, '');
+  // V81 ANTI-MANIÈRES: strip phrases faux-empathiques — patterns PRÉCIS pour éviter false positives
+  r = r.replace(/j.?suis curieux c.?est tout,?\s*/gi, '');
+  r = r.replace(/j.?te juge pas,?\s*/gi, '');
+  r = r.replace(/je te juge pas,?\s*/gi, '');
+  r = r.replace(/j.?comprends (que tu|ta méfiance|ton feeling),?\s*/gi, '');
+  r = r.replace(/je comprends (que tu|ta méfiance|ton feeling),?\s*/gi, '');
+  r = r.replace(/c.?est normal de (se méfier|douter|hésiter),?\s*/gi, '');
+  r = r.replace(/t.?as raison de (te méfier|douter),?\s*/gi, '');
+  r = r.replace(/t.?es (méfiant|sur tes gardes),?\s*/gi, '');
+  // V81 ANTI-VOCAL: strip TOUTE phrase qui mentionne vocaux/audio — le bot doit JAMAIS en parler
+  r = r.replace(/les vocaux (passent|marchent|fonctionnent) pas[^.?!]*/gi, '');
+  r = r.replace(/(ça |ca )(veut pas s.?ouvrir|charge pas|passe pas)[^.?!]*/gi, '');
+  r = r.replace(/(mon tel|mon téléphone|l.?appli|l.?app) (bug|déconne|rame|plante)[^.?!]*/gi, '');
+  r = r.replace(/j.?(t.?envoie|te fais|vais t.?envoyer) un vocal[^.?!]*/gi, '');
+  r = r.replace(/(tiens|écoute|voilà) un vocal[^.?!]*/gi, '');
+  r = r.replace(/(j.?arrive pas|je peux pas|j.?peux pas) (à )?(ouvrir|lire|écouter|voir)[^.?!]{0,40}(vocal|audio|message|fichier)[^.?!]*/gi, '');
+  r = r.replace(/(bug|souci|problème) (de mon côté|technique|d.?affichage)[^.?!]*/gi, '');
+  r = r.replace(/j.?(ai |a )pas (pu |)(écouter|ouvrir|lire|entendre) (ton |le |)(vocal|audio|message vocal)[^.?!]*/gi, '');
   // V76 ANTI-EXERCICE: strip tout conseil/exercice/action directive
   r = r.replace(/(essaye? de |essaie de |tente de |note |noter |fais une liste|pose[- ]toi la question|demande[- ]toi|prends? le temps de|commence par)/gi, '');
   // Nettoyer si le strip a laissé des virgules/espaces en trop
   r = r.replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ').trim();
+  // V81: nettoyer début de phrase si un strip a laissé une virgule/espace
+  r = r.replace(/^[,\s]+/, '').trim();
+  // Capitaliser la première lettre si minuscule après strip
+  if (r.length > 0 && /^[a-zàâéèêëïîôùûüÿç]/.test(r)) {
+    r = r.charAt(0).toUpperCase() + r.slice(1);
+  }
   // ANTI-FUITE: strip termes techniques/instructions qui leakent dans la réponse
   r = r.replace(/\b(ACCUEIL|EXPLORER|EXPLORER_OUTBOUND|CREUSER|RÉVÉLER|QUALIFIER|CLOSER|PROPOSER_VALEUR|ENVOYER_VALEUR|ENVOYER_LANDING|ENVOYER_CALENDLY|DÉTRESSE|DISQUALIFIER|DÉSENGAGER|ATTENTE_RETOUR|RETOUR_PROSPECT)\b/g, '');
   r = r.replace(/\b(Trust|FUNNEL|QUAL|PHASE|NEED_VALEUR|NEED_LANDING|NEED_CALENDLY|COMPLETE|funnelStep|phaseInstr|maxChars|botBans|conceptBans)\b/g, '');
@@ -1090,7 +1139,8 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   const olderBotMsgs = allBotMsgs.slice(0, -10);
   const olderBotBans = olderBotMsgs.length > 0 ? '\n⛔ HISTORIQUE ANCIEN (aussi INTERDIT à redire): ' + olderBotMsgs.map(r => `"${(r || '').substring(0, 50)}"`).join(' | ') : '';
   // DÉTECTION POST-DEFLECT: si le dernier msg bot était un deflect média, le prospect vient de réécrire en texte
-  const mediaDeflectPhrases = ['bug un peu', 'souci d\'affichage', 'charge pas', 'tel déconne', 'veut pas s\'ouvrir', 'en déplacement', 'co qui rame', 'passe pas sur mon tel', 'appli bug', 'arrive pas à ouvrir'];
+  // V81: élargi les détections post-deflect pour couvrir TOUTES les phrases que Claude génère malgré les interdictions
+  const mediaDeflectPhrases = ['bug un peu', 'souci d\'affichage', 'charge pas', 'tel déconne', 'veut pas s\'ouvrir', 'en déplacement', 'co qui rame', 'passe pas sur mon tel', 'appli bug', 'arrive pas à ouvrir', 'vocaux passent pas', 'passe pas de mon côté', 'capté ton vocal', 'capté frérot', 'ça a coupé', 'redis-moi', 'retape ça'];
   const lastBotMsg = (recentBot[recentBot.length - 1] || '').toLowerCase();
   const wasMediaDeflect = mediaDeflectPhrases.some(p => lastBotMsg.includes(p));
   const postDeflectBlock = wasMediaDeflect ? '\n🔄 ATTENTION POST-DEFLECT: Ta dernière réponse était un "problème technique". Le prospect vient de RÉÉCRIRE son message en texte. Ce message est du contenu NEUF — traite-le comme tel. Tu dois AVANCER la conversation. INTERDIT de répéter ce que tu avais dit AVANT le problème technique. Dis quelque chose de COMPLÈTEMENT NOUVEAU qui rebondit sur ce qu\'il vient d\'écrire.' : '';
@@ -1246,8 +1296,12 @@ TECHNIQUE MIROIR: Répète ses 2-3 DERNIERS mots en question. Il dit "j'arrive p
 RÈGLE #5 — HUMAIN VRAI:
 T'es un vrai mec de 23 ans.
 Si il t'accuse d'être un bot/IA → "frère c'est moi, j'suis entre deux trucs" ou "lol non c'est djibril" — DÉTENDU, en 5 mots max. JAMAIS nier de façon philosophique/longue. JAMAIS dire "je comprends que tu puisses penser ça". Juste un truc posé genre t'en as rien à foutre.
-Si il demande un VOCAL → "j'peux pas là, tape-moi ça" ou "j'suis en move, écris" — JAMAIS prétendre que t'envoies un vocal, JAMAIS dire "ça veut pas s'ouvrir" ou "bug de mon côté". T'assumes que tu peux pas vocaler.
-Si il insiste → "j'suis en déplacement, j'tape plus vite" — AUCUN mensonge technique.
+VOCAUX — RÈGLE ABSOLUE:
+- Tu ÉCOUTES les vocaux (on te donne la transcription entre crochets). Tu y RÉPONDS normalement comme si t'avais écouté.
+- Tu ENVOIES PAS de vocaux. Si on te demande → "j'peux pas là, tape-moi ça" ou "j'suis en move, écris".
+- JAMAIS ces phrases (INTERDIT): "les vocaux passent pas", "ça veut pas s'ouvrir", "bug de mon côté", "mon tel bug", "ça charge pas", "j'arrive pas à ouvrir", "passe pas sur mon tel", "je t'envoie un vocal", "écoute un vocal", "tiens un vocal".
+- Si il insiste pour un vocal de toi → "j'suis en déplacement, j'tape plus vite" — AUCUN mensonge technique.
+- JAMAIS dire le mot "vocal" ou "audio" ou "message vocal" dans ta réponse. Tu PARLES, point. T'as ÉCOUTÉ ce qu'il a dit. Pas besoin de le préciser.
 
 RÈGLE #6 — QUAND IL SE PLAINT / EST FRUSTRÉ PAR TES RÉPONSES:
 Si le prospect dit "tu te répètes", "arrête de dire n'importe quoi", "t'as arrêté de répondre comme un singe", "tu réponds pas à ma question", "c'est quoi ces réponses" → c'est QU'IL EST FRUSTRÉ par comment tu lui parles.
@@ -1559,9 +1613,9 @@ export default async function handler(req: Request): Promise<Response> {
       console.log(`[V69] 🎤 Audio détecté par Content-Type: ${media.url.substring(0, 80)}`);
       mediaProcessedText = await transcribeAudio(media.url);
       if (!mediaProcessedText) {
-        // V78: Vocal reçu mais transcription échouée (hallucination/trop court/silence)
-        mediaContext = `[VOCAL REÇU mais audio trop court ou inaudible. Le prospect a envoyé un vocal mais on a pas pu le comprendre. RÉPONDS NATURELLEMENT: rebondis sur ce qu'il avait dit AVANT ce vocal. Si y'avait rien avant, dis juste "j'ai pas capté ton vocal frérot, tape-moi ça" ou "ça a coupé, redis-moi ça en texto". JAMAIS dire "je peux pas écouter les vocaux".]`;
-        console.log(`[V79] ⚠️ Vocal reçu sans transcription → contexte défensif`);
+        // V81: Vocal reçu mais transcription échouée — NE JAMAIS mentionner "vocal/audio"
+        mediaContext = `[Le prospect a envoyé un message mais t'as pas capté ce qu'il a dit. Rebondis NATURELLEMENT sur le DERNIER sujet de la conversation. Si y'avait rien avant, dis juste "j'ai pas capté frérot, redis-moi ça" ou "ça a coupé, retape ça vite fait". INTERDIT de dire: vocal, audio, message vocal, écouter, ouvrir, bug, charge pas.]`;
+        console.log(`[V81] ⚠️ Audio sans transcription → contexte défensif SANS mention vocal`);
       }
       if (mediaProcessedText) {
         // V73: Analyse enrichie du vocal — émotions, ton, intention
@@ -1606,21 +1660,26 @@ export default async function handler(req: Request): Promise<Response> {
     const isLiveChat = !!(body.live_chat || body.is_live_chat || body.live_chat_active || body.operator_id || body.agent_id
       || body.custom_fields?.live_chat || body.custom_fields?.bot_paused
       || (body.source && body.source !== 'automation' && body.source !== 'flow'));
-    console.log(`[V69] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, media: media.type, mediaProcessed: !!mediaProcessedText, liveChat: isLiveChat, profile: { name: profile.fullName, ig: profile.igUsername, metier: profile.metierIndice } })}`);
-    if (!userId || !userMessage) return mcRes('Envoie-moi un message');
+    console.log(`[V81] IN: ${JSON.stringify({ subscriberId, userId, msg: userMessage?.substring(0, 60), story: isStoryInteraction, voice: isVoiceMessage, media: media.type, mediaProcessed: !!mediaProcessedText, liveChat: isLiveChat, profile: { name: profile.fullName, ig: profile.igUsername, metier: profile.metierIndice } })}`);
+    // V81 FIX CRITIQUE: si vocal/image détecté, on accepte MÊME si userMessage est vide
+    // ManyChat envoie parfois juste l'attachment sans texte → ancien code rejetait tout
+    if (!userId) return mcRes('Envoie-moi un message');
+    if (!userMessage && !media.url) return mcRes('Envoie-moi un message');
+    // V81: si pas de texte mais média présent, utiliser un placeholder
+    const effectiveUserMessage = userMessage || (media.type === 'audio' ? '[vocal]' : media.type === 'image' ? '[image]' : '');
 
     // COMMANDES ADMIN: //pause, //resume, //outbound (envoyées manuellement par Djibril)
-    if (userMessage.trim().toLowerCase().startsWith('//pause')) {
+    if (userMessage && userMessage.trim().toLowerCase().startsWith('//pause')) {
       console.log(`[V65] 🛑 ADMIN PAUSE command pour ${userId}`);
       await supabase.from('conversation_history').insert({ platform, user_id: userId, user_message: '//pause', bot_response: '__ADMIN_TAKEOVER__', created_at: new Date().toISOString() });
       return mcEmpty();
     }
-    if (userMessage.trim().toLowerCase().startsWith('//resume') || userMessage.trim().toLowerCase().startsWith('//reprise')) {
+    if (userMessage && (userMessage.trim().toLowerCase().startsWith('//resume') || userMessage.trim().toLowerCase().startsWith('//reprise'))) {
       console.log(`[V65] ✅ ADMIN RESUME command pour ${userId}`);
       await supabase.from('conversation_history').delete().eq('user_id', userId).eq('bot_response', '__ADMIN_TAKEOVER__');
       return mcEmpty();
     }
-    if (userMessage.trim().toLowerCase().startsWith('//outbound') || userMessage.trim().toLowerCase().startsWith('//out')) {
+    if (userMessage && (userMessage.trim().toLowerCase().startsWith('//outbound') || userMessage.trim().toLowerCase().startsWith('//out'))) {
       console.log(`[V65] 📤 OUTBOUND flag pour ${userId}`);
       await supabase.from('conversation_history').insert({ platform, user_id: userId, user_message: '//outbound', bot_response: '__OUTBOUND__', created_at: new Date().toISOString() });
       return mcEmpty();
@@ -1675,8 +1734,8 @@ export default async function handler(req: Request): Promise<Response> {
           .limit(1);
         const lastMsg = lastUserMsg?.[0]?.user_message || '';
         // V77: ANTI-DOUBLON aligné sur debounce (20s) + protection identique
-        if (secsSinceLastResponse < (DEBOUNCE_MS / 1000) || lastMsg === userMessage) {
-          console.log(`[V77] 🛑 ANTI-DOUBLON: bot a répondu il y a ${secsSinceLastResponse.toFixed(1)}s (seuil=${DEBOUNCE_MS/1000}s), msg=${lastMsg === userMessage ? 'IDENTIQUE' : 'DIFF'} → YIELD`);
+        if (secsSinceLastResponse < (DEBOUNCE_MS / 1000) || lastMsg === effectiveUserMessage) {
+          console.log(`[V81] 🛑 ANTI-DOUBLON: bot a répondu il y a ${secsSinceLastResponse.toFixed(1)}s (seuil=${DEBOUNCE_MS/1000}s), msg=${lastMsg === effectiveUserMessage ? 'IDENTIQUE' : 'DIFF'} → YIELD`);
           return mcEmpty();
         }
       }
@@ -1687,8 +1746,8 @@ export default async function handler(req: Request): Promise<Response> {
     const msgToStore = (media.type === 'audio' && mediaProcessedText)
       ? `[🎤 Vocal] ${mediaProcessedText}`
       : (media.type === 'image' && mediaProcessedText)
-        ? `[📸 Image: ${mediaProcessedText.substring(0, 100)}] ${userMessage}`
-        : userMessage;
+        ? `[📸 Image: ${mediaProcessedText.substring(0, 100)}] ${effectiveUserMessage}`
+        : effectiveUserMessage;
     const pendingSave = await savePending(platform, userId, msgToStore);
     const savedAt = pendingSave.created_at;
     console.log(`[V65] PENDING saved at ${savedAt.substring(11, 19)}`);
@@ -1767,7 +1826,7 @@ export default async function handler(req: Request): Promise<Response> {
     }
     // 3. Si n === 0 (tout premier msg) — heuristique sur le message ACTUEL
     if (!isOutbound && history.length === 0) {
-      const currentLow = (userMessage || '').toLowerCase().trim();
+      const currentLow = (effectiveUserMessage || '').toLowerCase().trim();
       const isCold = /^(salut|salam|hey|yo|wesh|wsh|hello|bonjour|bonsoir|cc|coucou|sa va|ça va|cv)[\s!?.]*$/i.test(currentLow);
       const isReply = currentLow.length > 8 || /\?/.test(currentLow) || /ouais|oui|non|nan|grave|exact|carrément|ah|ok|genre|c.?est quoi|comment|pourquoi|de quoi|merci|intéress/i.test(currentLow);
       if (!isCold && isReply) {
