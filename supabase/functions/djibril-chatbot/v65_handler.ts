@@ -1356,6 +1356,34 @@ export default async function handler(req: Request): Promise<Response> {
       }
     }
 
+    // === V70.3c ANTI-DOUBLON: verrou per-user — si le bot a répondu il y a <15s, yield ===
+    const { data: recentResponse } = await supabase.from('conversation_history')
+      .select('created_at, bot_response')
+      .eq('user_id', userId)
+      .neq('bot_response', '__PENDING__')
+      .neq('bot_response', '__ADMIN_TAKEOVER__')
+      .neq('bot_response', '__OUTBOUND__')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (recentResponse && recentResponse.length > 0) {
+      const lastResponseTime = new Date(recentResponse[0].created_at).getTime();
+      const secsSinceLastResponse = (Date.now() - lastResponseTime) / 1000;
+      if (secsSinceLastResponse < 15) {
+        // Vérifier aussi si le dernier message user dans l'historique est le MÊME que celui qu'on traite
+        const { data: lastUserMsg } = await supabase.from('conversation_history')
+          .select('user_message')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        const lastMsg = lastUserMsg?.[0]?.user_message || '';
+        // Si le message est identique OU si le bot a répondu il y a <8s (doublon ManyChat), yield
+        if (secsSinceLastResponse < 8 || lastMsg === userMessage) {
+          console.log(`[V70.3c] 🛑 ANTI-DOUBLON: bot a répondu il y a ${secsSinceLastResponse.toFixed(1)}s, msg=${lastMsg === userMessage ? 'IDENTIQUE' : 'DIFF'} → YIELD`);
+          return mcEmpty();
+        }
+      }
+    }
+
     // === V65 DEBOUNCE MECHANISM ===
     // V68: Si vocal transcrit, stocker la transcription + indicateur dans l'historique
     const msgToStore = (media.type === 'audio' && mediaProcessedText)
