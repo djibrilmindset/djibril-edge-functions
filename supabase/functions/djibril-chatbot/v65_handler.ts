@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V70.2 — V70.1 + VARIATION OUVERTURE renforcée + ZÉRO TROIS POINTS ===
+// === V70.2 — V70.1 + VARIATION OUVERTURE + ZÉRO "..." + ZÉRO SALUT RÉPÉTÉ + PHRASES COMPLÈTES + EMPATHIE ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -15,7 +15,7 @@ const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
 const MODEL = 'mistral-large-latest';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'whisper-1';
-const MAX_TOKENS = 140;
+const MAX_TOKENS = 180; // V70.2: remonté de 140 — 140 tronquait les phrases
 const DEBOUNCE_MS = 10000; // 10 seconds for message grouping (prospects fragmentent souvent sur 8-12s)
 
 let _mistralKey: string | null = null;
@@ -840,8 +840,8 @@ function clean(text: string): string {
   r = r.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '');
   // Nettoyage espaces multiples après strips
   r = r.replace(/\s{2,}/g, ' ').trim();
-  // TRONCATURE INTELLIGENTE: protéger les URLs — seuil 200 chars (V70: messages COURTS)
-  if (r.length > 200) {
+  // TRONCATURE INTELLIGENTE: protéger les URLs — seuil 280 chars (V70.2: 200 tronquait les phrases)
+  if (r.length > 280) {
     // Extraire les URLs présentes dans le texte
     const urlMatch = r.match(/https?:\/\/[^\s)}\]]+/g);
     if (urlMatch && urlMatch.length > 0) {
@@ -862,7 +862,7 @@ function clean(text: string): string {
       }
     } else {
       // Pas d'URL → troncature intelligente: couper sur une FIN DE PHRASE, jamais en plein milieu
-      const cut = r.substring(0, 200);
+      const cut = r.substring(0, 280);
       // Chercher le dernier séparateur de phrase (? ou ! UNIQUEMENT — pas virgule, ça fait coupé)
       const bp = Math.max(cut.lastIndexOf('?'), cut.lastIndexOf('!'));
       const bestBreak = bp > 40 ? bp : -1;
@@ -875,9 +875,9 @@ function clean(text: string): string {
       }
     }
   }
-  // ANTI-PHRASE-COUPÉE: vérifier que le message ne se termine pas en plein milieu d'une idée
-  // Si le message finit par un mot de liaison/transition → phrase incomplète, on coupe avant
-  const trailingIncomplete = /\b(que|qui|les|des|un|une|le|la|de|du|et|ou|mais|car|si|ce|cette|ces|son|sa|ses|mon|ma|mes|ton|ta|tes|pour|dans|sur|par|avec|est|sont|a|ont|fait|être|avoir|quand|comme|où|dont)\s*$/i;
+  // ANTI-PHRASE-COUPÉE V70.2: vérifier que le message ne se termine pas en plein milieu d'une idée
+  // Si le message finit par un mot de liaison/transition/article/préposition → phrase incomplète, on coupe avant
+  const trailingIncomplete = /\b(que|qui|les|des|un|une|le|la|de|du|et|ou|mais|car|si|ce|cette|ces|son|sa|ses|mon|ma|mes|ton|ta|tes|pour|dans|sur|par|avec|est|sont|a|ont|fait|être|avoir|quand|comme|où|dont|en|au|aux|pas|plus|très|trop|vraiment|genre|c'est|j'ai|t'as|y'a|faut|peut|va|ça)\s*$/i;
   if (trailingIncomplete.test(r)) {
     // Couper sur ? ou ! UNIQUEMENT — jamais sur virgule (ça fait phrase incomplète)
     const lastSafe = Math.max(r.lastIndexOf('?'), r.lastIndexOf('!'));
@@ -1051,6 +1051,10 @@ RÈGLES ABSOLUES:
 - ZÉRO NEEDINESS: Tu proposes, tu forces jamais. Détaché
 - ANTI-SELF-TALK: Ta réponse = le DM envoyé. Pas de raisonnement interne
 - ANTI-FUITE: Jamais de termes internes (Pellabère, Cialdini, funnel, trust, phase, DRDP, CTA, récipient, encre, dopamine)
+- ZÉRO SALUTATION RÉPÉTÉE: "Yo", "Salut", "Hey", "Wesh" = UNE SEULE FOIS dans toute la conv. Après le 1er message, JAMAIS re-saluer. Tu reprends la conv direct, comme un pote qui répond à un texto
+- PHRASE COMPLÈTE OBLIGATOIRE: Chaque phrase doit être FINIE. Jamais de phrase coupée, jamais de pensée incomplète. Si tu peux pas finir ta phrase → raccourcis la AVANT de l'écrire. Mieux vaut un message court et complet qu'un message long coupé au milieu
+- EMPATHIE RÉELLE: Cerne les ÉMOTIONS du mec. S'il est frustré, valide. S'il est perdu, rassure. S'il est motivé, surfe dessus. Tu SENS la personne, t'es pas un robot qui enchaîne les questions
+- RESPECT DU DÉSENGAGEMENT: Si le mec veut plus parler, force pas. Laisse un message ouvert et léger, pas de relance agressive. T'es détaché, pas désespéré
 - "Adam" INTERDIT. JAMAIS de prix. ${salamRule}
 
 STYLE BANLIEUE: Contractions (j'sais, t'as, j'fais, y'a, j'capte ~50%). Simple. Respectueux mais proche. Pas un thug, un grand frère de quartier. Zéro émoji. Zéro point final. Zéro formatage. ZÉRO TROIS POINTS ("...") — jamais de "..." dans tes messages, c'est un tic de chatbot.
@@ -1511,6 +1515,12 @@ export default async function handler(req: Request): Promise<Response> {
     if (hasSalamBeenSaid(history) && /^salam/i.test(response)) {
       response = response.replace(/^salam[\s!?.]*(?:aleykoum)?[\s!?.]*(?:fr[eé]rot)?[\s!?.,]*/i, '').trim();
       if (response) response = response.charAt(0).toUpperCase() + response.slice(1);
+    }
+    // V70.2: ZÉRO SALUTATION RÉPÉTÉE — strip Yo/Salut/Hey/Wesh si c'est pas le 1er msg
+    if (history.length > 0) {
+      response = response.replace(/^(yo|salut|hey|wesh|wsh|hello|bonjour|bonsoir|coucou|cc)[\s!?,.]*/i, '').trim();
+      if (response) response = response.charAt(0).toUpperCase() + response.slice(1);
+      if (!response) response = null;
     }
     // SÉCURITÉ FUNNEL: strip liens interdits selon le step actuel
     if (funnel.funnelStep === 'NEED_VALEUR') {
