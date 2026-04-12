@@ -12,12 +12,14 @@ const BOT_RESPONSE_FIELD_ID = 14462726;
 const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
-const MODEL = 'mistral-large-latest';
+// V78: CLAUDE OPUS — cerveau principal. Mistral/Pixtral = images. Whisper = audio.
+const MODEL = 'claude-opus-4-20250514';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'whisper-1';
-const MAX_TOKENS = 80; // V74: assez pour 1-2 phrases COMPLÈTES. Le system prompt limite déjà la longueur
-const DEBOUNCE_MS = 20000; // V77: 20s — équilibre réactivité + batching. 40s était trop lent, les prospects décrochaient
+const MAX_TOKENS = 80;
+const DEBOUNCE_MS = 20000;
 
+let _anthropicKey: string | null = null;
 let _mistralKey: string | null = null;
 let _openaiKey: string | null = null;
 let _mcKey: string | null = null;
@@ -27,14 +29,23 @@ let _techniquesCache: Record<string, any[]> = {};
 let _techniquesFetchedAt = 0;
 const TECH_TTL = 10 * 60 * 1000;
 
+// V78: Anthropic API key pour Claude Opus
+async function getAnthropicKey(): Promise<string | null> {
+  if (_anthropicKey && Date.now() - _keysFetchedAt < KEY_TTL) return _anthropicKey;
+  try {
+    const { data } = await supabase.rpc('get_anthropic_api_key');
+    if (data) { _anthropicKey = data; _keysFetchedAt = Date.now(); return _anthropicKey; }
+  } catch {}
+  // Fallback: clé stockée dans Supabase RPC uniquement (pas de hardcode pour éviter secret scanning)
+  console.log('[V78] ⚠️ Anthropic key not found in RPC, no fallback');
+  return null;
+}
 async function getMistralKey(): Promise<string | null> {
   if (_mistralKey && Date.now() - _keysFetchedAt < KEY_TTL) return _mistralKey;
-  // Essayer de récupérer depuis la DB d'abord, sinon fallback hardcodé
   try {
     const { data } = await supabase.rpc('get_mistral_api_key');
     if (data) { _mistralKey = data; _keysFetchedAt = Date.now(); return _mistralKey; }
   } catch {}
-  // Fallback: clé directe
   _mistralKey = 'z9Ikvjdr0f65Fq5axFheKwdCOiyUJXti';
   _keysFetchedAt = Date.now();
   return _mistralKey;
@@ -131,6 +142,44 @@ async function extractMediaInfo(body: any): Promise<{ type: 'image' | 'audio' | 
   return { type: detectedType, url };
 }
 
+// V78: WHISPER HALLUCINATION PATTERNS — Whisper invente du texte sur les audios silencieux/courts
+const WHISPER_HALLUCINATION_PATTERNS = [
+  /sous[- ]?titr/i, /merci d.avoir regard/i, /abonnez[- ]?vous/i, /like et partag/i,
+  /musique/i, /♪|♫|🎵/i, /\bla la la\b/i, /\bhum hum\b/i,
+  /\btrottinette\b/i, /\bvélo\b/i, /\bscooter\b/i,
+  /^\.+$/, /^\s*$/, /^,+$/,
+  /rendez-vous sur/i, /retrouvez[- ]?nous/i, /n.?oubliez pas de/i,
+  /c.?est la fin/i, /à bientôt/i, /prochain épisode/i, /prochaine vidéo/i,
+  /copyright|©|tous droits/i, /amara\.org/i,
+];
+function isWhisperHallucination(text: string, blobSize: number): boolean {
+  if (!text || text.trim().length === 0) return true;
+  // V78: Audio trop petit = probablement silence ou bruit (< 5KB ≈ < 1 seconde)
+  if (blobSize < 5000) {
+    console.log(`[V78] 🛑 Audio trop court (${blobSize} bytes < 5KB) → hallucination probable`);
+    return true;
+  }
+  // V78: Transcription trop courte (1-2 mots) sur un petit fichier = suspect
+  const wordCount = text.trim().split(/\s+/).length;
+  if (wordCount <= 2 && blobSize < 15000) {
+    console.log(`[V78] 🛑 Transcription trop courte (${wordCount} mots, ${blobSize} bytes) → hallucination probable`);
+    return true;
+  }
+  // V78: Patterns connus d'hallucination Whisper
+  for (const pat of WHISPER_HALLUCINATION_PATTERNS) {
+    if (pat.test(text)) {
+      console.log(`[V78] 🛑 Whisper hallucination pattern détecté: "${text.substring(0, 60)}" matches ${pat}`);
+      return true;
+    }
+  }
+  // V78: Texte qui ne ressemble PAS à du français oral (trop "propre", trop long sans contractions)
+  if (text.length > 50 && !/[',]/.test(text) && /^[A-Z]/.test(text)) {
+    console.log(`[V78] ⚠️ Transcription suspecte (trop formelle): "${text.substring(0, 60)}"`);
+    // Pas un rejet ici, juste un warning — le contenu peut quand même être valide
+  }
+  return false;
+}
+
 async function transcribeAudio(audioUrl: string): Promise<string | null> {
   const openaiKey = await getOpenAIKey();
   if (!openaiKey) {
@@ -142,13 +191,20 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
     const audioResponse = await fetch(audioUrl);
     if (!audioResponse.ok) { console.log(`[V69] Audio fetch failed: ${audioResponse.status}`); return null; }
     const audioBlob = await audioResponse.blob();
+    // V78: Vérifier la taille AVANT d'envoyer à Whisper
+    const blobSize = audioBlob.size;
+    console.log(`[V78] Audio blob size: ${blobSize} bytes`);
+    if (blobSize < 2000) {
+      // < 2KB = pas d'audio réel (0:00 secondes par exemple)
+      console.log(`[V78] 🛑 Audio trop petit (${blobSize} bytes) → skip Whisper`);
+      return null;
+    }
     // Envoyer à Whisper — V70.1: prompt hints FR oral/banlieue pour meilleure reconnaissance
     const formData = new FormData();
     formData.append('file', audioBlob, 'audio.ogg');
     formData.append('model', WHISPER_MODEL);
     formData.append('language', 'fr');
     formData.append('response_format', 'text');
-    // V70.1: Le prompt guide Whisper sur le contexte — améliore la reconnaissance d'argot, verlan, accents, mots avalés
     formData.append('prompt', "Conversation en français oral entre jeunes. Style banlieue, contractions: j'sais, t'as, j'fais, y'a, j'capte, wesh, frérot, le s, c'est chaud, grave, genre, en mode, le délire, tranquille, wallah, hamdoulilah, inchallah, starfoullah. Vocabulaire: business, mindset, argent, thune, oseille, biff, gagner sa vie, liberté, autonomie, bloquer, galérer, se lancer, entrepreneur, freelance, coiffeur, livreur, Uber, formation, accompagnement, coaching. Les gens parlent vite, avalent des syllabes, mélangent français et arabe.");
     const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
@@ -157,7 +213,12 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
     });
     if (!whisperResponse.ok) { console.log(`[V69] Whisper error: ${whisperResponse.status}`); return null; }
     const transcription = (await whisperResponse.text()).trim();
-    console.log(`[V69] 🎤 Whisper transcription: "${transcription.substring(0, 100)}"`);
+    console.log(`[V78] 🎤 Whisper transcription: "${transcription.substring(0, 100)}" (${blobSize} bytes)`);
+    // V78: Vérifier si c'est une hallucination
+    if (isWhisperHallucination(transcription, blobSize)) {
+      console.log(`[V78] 🛑 HALLUCINATION DÉTECTÉE → transcription ignorée`);
+      return null;
+    }
     return transcription || null;
   } catch (e: any) {
     console.error('[V69] transcribeAudio error:', e.message);
@@ -1183,14 +1244,14 @@ Si le prospect dit "tu te répètes", "arrête de dire n'importe quoi", "t'as ar
 Tu dois: 1) Reconnaître DIRECT: "Excuse frérot", "My bad", "Ouais j'étais à côté" 2) RÉPONDRE à ce qu'il avait VRAIMENT demandé — relis le DERNIER msg qu'il t'avait envoyé AVANT sa plainte et RÉPONDS-Y. 3) JAMAIS ignorer sa frustration. JAMAIS balancer un truc random. JAMAIS le psychanalyser ("t'as l'impression d'être coincé") quand il te dit juste que tu réponds mal.
 C'est la PRIORITÉ ABSOLUE: si le prospect se plaint de tes réponses, tu reconnais et tu corriges. Un setter qui ignore ça = il perd le prospect INSTANTANÉMENT.
 
-RÈGLE #6 — CONTENU INAPPROPRIÉ:
+RÈGLE #7 — CONTENU INAPPROPRIÉ:
 Si le mec parle de porno, drogue, violence, trucs chelous → redirige en 1 phrase: "c'est ton délire, moi j'parle business" ou "chacun son truc". JAMAIS t'engager dans le sujet. JAMAIS juger non plus. Switch direct sur son activité/objectif.
 
-RÈGLE #7 — BARBER/COIFFURE:
+RÈGLE #8 — BARBER/COIFFURE:
 Si le prospect BOSSE dans la coiffure/barber → C'EST SON MÉTIER, respecte-le. Tu peux en parler POUR CREUSER sa douleur et ses désirs: "t'es au pourcentage, ça te convient ?", "tu veux ton propre salon ou pas du tout ?". JAMAIS inventer de termes techniques (tondeuse, fade, dégradé) si IL les a pas utilisés. Parle de SON vécu, reprends SES mots.
 Si le prospect parle PAS de barber/coiffure → JAMAIS mentionner ce domaine.
 
-RÈGLE #8 — OUVERTURES VARIÉES:
+RÈGLE #9 — OUVERTURES VARIÉES:
 INTERDITS en début de message: "Merci de partager ça", "Intéressant ce que tu dis", "J'apprécie ta transparence", "C'est courageux de dire ça".
 Varie tes ouvertures. Exemples: "Ah ouais", "Clairement", "J'capte", "Mmh", "Ok", ou RIEN (commence direct par le contenu).
 "Yo" → max 1 fois sur 5 messages. Pas systématique.
@@ -1349,7 +1410,8 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory, 
 }
 
 async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile, isOutbound: boolean = false, mediaInfo?: { type: 'image' | 'audio' | null; processedText: string | null; context: string | null }): Promise<string> {
-  const key = await getMistralKey();
+  // V78: Claude Opus via Anthropic API
+  const key = await getAnthropicKey();
   if (!key) return 'Souci technique, réessaie dans 2 min';
   const isDistress = isDistressOrStuck === true && detectDistress(msg, history);
   const phaseResult = getPhase(history, msg, isDistress, mem, isOutbound);
@@ -1385,20 +1447,23 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
     let retryHint = '';
     if (attempt > 0) retryHint = `\n\n⚠️ TENTATIVE ${attempt + 1}: TA RÉPONSE PRÉCÉDENTE ÉTAIT TROP SIMILAIRE À UN MSG DÉJÀ ENVOYÉ. Tu DOIS changer: 1) les MOTS 2) la STRUCTURE 3) l'IDÉE/ANGLE. Si t'as posé une question avant → cette fois VALIDE ou REFORMULE. Si t'as parlé de blocage → parle d'AUTRE CHOSE. TOTALEMENT DIFFÉRENT.`;
     try {
-      // MISTRAL API: system prompt = premier message role "system", puis les messages user/assistant
-      const mistralMessages = [{ role: 'system', content: sys + retryHint }, ...messages];
-      const r = await fetch('https://api.mistral.ai/v1/chat/completions', {
+      // V78: ANTHROPIC CLAUDE API — system prompt séparé, messages user/assistant
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-        body: JSON.stringify({ model: MODEL, max_tokens: tokens, temperature: temp, messages: mistralMessages })
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({ model: MODEL, max_tokens: tokens, temperature: temp, system: sys + retryHint, messages })
       });
       const result = await r.json();
-      if (result.choices?.[0]?.message?.content) {
-        const raw = result.choices[0].message.content;
-        // ANTI-SELF-TALK: si Mistral a sorti son raisonnement interne, retry avec hint
+      if (result.content?.[0]?.text) {
+        const raw = result.content[0].text;
+        // V78: ANTI-SELF-TALK — Claude le fait rarement mais on garde la sécurité
         if (isSelfTalk(raw)) {
-          console.log(`[V65] 🚨 SELF-TALK DÉTECTÉ attempt ${attempt + 1}: "${raw.substring(0, 80)}"`);
-          retryHint = `\n\n🚨 ERREUR CRITIQUE: Ta réponse précédente était du RAISONNEMENT INTERNE ("Il demande...", "Je dois..."). Tu as parlé DE la conversation au lieu de PARTICIPER à la conversation. Tu es Djibril qui parle en DM. Réponds DIRECTEMENT au prospect comme un pote. JAMAIS de méta-commentary. JAMAIS parler de toi à la 3ème personne. JAMAIS analyser ce que le prospect veut. RÉPONDS-LUI directement.`;
+          console.log(`[V78] 🚨 SELF-TALK DÉTECTÉ attempt ${attempt + 1}: "${raw.substring(0, 80)}"`);
+          retryHint = `\n\n🚨 ERREUR CRITIQUE: Ta réponse était du RAISONNEMENT INTERNE. Tu es Djibril qui parle en DM. Réponds DIRECTEMENT au prospect comme un pote. JAMAIS de méta-commentary.`;
           continue;
         }
         let cleaned = clean(raw);
@@ -1465,6 +1530,11 @@ export default async function handler(req: Request): Promise<Response> {
     if (media.type === 'audio' && media.url) {
       console.log(`[V69] 🎤 Audio détecté par Content-Type: ${media.url.substring(0, 80)}`);
       mediaProcessedText = await transcribeAudio(media.url);
+      if (!mediaProcessedText) {
+        // V78: Vocal reçu mais transcription échouée (hallucination/trop court/silence)
+        mediaContext = `[VOCAL REÇU mais audio trop court ou inaudible. Le prospect a envoyé un vocal mais on a pas pu le comprendre. RÉPONDS NATURELLEMENT: rebondis sur ce qu'il avait dit AVANT ce vocal. Si y'avait rien avant, dis juste "j'ai pas capté ton vocal frérot, tape-moi ça" ou "ça a coupé, redis-moi ça en texto". JAMAIS dire "je peux pas écouter les vocaux".]`;
+        console.log(`[V78] ⚠️ Vocal reçu sans transcription → contexte défensif`);
+      }
       if (mediaProcessedText) {
         // V73: Analyse enrichie du vocal — émotions, ton, intention
         const vocalLen = mediaProcessedText.length;
@@ -1797,7 +1867,7 @@ export default async function handler(req: Request): Promise<Response> {
     if (!response) {
       const mInfo2 = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
       response = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile, isOutbound, mInfo2);
-      console.log(`[V69] MISTRAL ${response.length}c`);
+      console.log(`[V78] CLAUDE ${response.length}c`);
     }
     if (hasSalamBeenSaid(history) && /^salam/i.test(response)) {
       response = response.replace(/^salam[\s!?.]*(?:aleykoum)?[\s!?.]*(?:fr[eé]rot)?[\s!?.,]*/i, '').trim();
