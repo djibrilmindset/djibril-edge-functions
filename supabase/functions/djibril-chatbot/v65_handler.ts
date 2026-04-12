@@ -16,7 +16,7 @@ const MODEL = 'mistral-large-latest';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'whisper-1';
 const MAX_TOKENS = 50; // V71: ULTRA COURT — un mec tape pas des pavés en DM
-const DEBOUNCE_MS = 10000; // 10 seconds for message grouping (prospects fragmentent souvent sur 8-12s)
+const DEBOUNCE_MS = 15000; // V73: 15s — les prospects fragmentent sur 8-20s, 10s captait pas tout
 
 let _mistralKey: string | null = null;
 let _openaiKey: string | null = null;
@@ -1111,7 +1111,16 @@ INTERDITS en début de message: "Merci de partager ça", "Intéressant ce que tu
 Varie tes ouvertures. Exemples: "Ah ouais", "Clairement", "J'capte", "Mmh", "Ok", ou RIEN (commence direct par le contenu).
 "Yo" → max 1 fois sur 5 messages. Pas systématique.
 
-STYLE: Banlieue parisienne cultivée. Contractions (j'sais, t'as, y'a, j'capte ~40%). Virgules et ? uniquement. Zéro point final, zéro !, zéro ..., zéro émoji. 1 phrase = 1 bloc = 1 message.
+STYLE DJIBRIL RÉEL (extrait de ses vrais messages):
+- Contractions: j'capte, t'as, y'a, j'sais, c'est, j'vois, j'te (40-50% des phrases)
+- Expressions: "le délire", "le game", "le truc c'est que", "en vrai", "du coup", "genre", "frérot", "en mode"
+- Rires: "mdrr" (avec 2 R), "lol" — JAMAIS "haha" ou "ahaha"
+- Approbation: "grave", "clairement", "j'capte", "ah ouais"
+- Ponctuation: virgules et ? uniquement. Zéro point final, zéro !, zéro ..., zéro émoji
+- Registre: cultivé MAIS oral — tu connais tes sujets mais tu parles comme un mec, pas comme un prof
+- TON: direct, tu commandes presque — "du coup t'en es où", pas "est-ce que tu pourrais me dire où tu en es"
+- JAMAIS: "Je comprends ta situation", "C'est un vrai challenge", "J'apprécie ta transparence", "C'est courageux", "Merci de partager"
+- À LA PLACE: "j'capte", "c'est chaud", "j'vois le délire", "ah ouais", "ok"
 INTERDIT: "Adam", termes internes, markdown, prix de l'offre, Pellabère, Cialdini, récipient, encre, dopamine, funnel.
 ${salamRule}
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN dispo: ${LINK_VALEUR}` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN dispo: ${LINK_LANDING}` : `LIEN dispo: ${CALENDLY_LINK}`}
@@ -1313,16 +1322,39 @@ export default async function handler(req: Request): Promise<Response> {
       console.log(`[V69] 🎤 Audio détecté par Content-Type: ${media.url.substring(0, 80)}`);
       mediaProcessedText = await transcribeAudio(media.url);
       if (mediaProcessedText) {
-        mediaContext = `[Le prospect a envoyé un MESSAGE VOCAL. Transcription: "${mediaProcessedText}"]\nRéponds comme si tu avais ÉCOUTÉ son vocal. JAMAIS mentionner "transcription", "vocal", "audio". Tu l'as ENTENDU, point.`;
-        console.log(`[V69] ✅ Vocal transcrit: "${mediaProcessedText.substring(0, 80)}"`);
+        // V73: Analyse enrichie du vocal — émotions, ton, intention
+        const vocalLen = mediaProcessedText.length;
+        const hasQuestion = /\?/.test(mediaProcessedText);
+        const isExcited = /!|trop|grave|ouf|dingue|incroyable|wallah/i.test(mediaProcessedText);
+        const isFrustrated = /putain|merde|chiant|saoul|galère|j'en peux plus|ras le bol/i.test(mediaProcessedText);
+        const isHesitant = /euh|bah|genre|j'sais pas|peut-être|enfin/i.test(mediaProcessedText);
+        let tonAnalysis = '';
+        if (isFrustrated) tonAnalysis = 'TON: frustré/agacé — montre que tu captes sa frustration, rebondis dessus';
+        else if (isExcited) tonAnalysis = 'TON: excité/motivé — surfe sur cette énergie';
+        else if (isHesitant) tonAnalysis = 'TON: hésitant/incertain — rassure sans forcer';
+        else if (vocalLen > 200) tonAnalysis = 'TON: détaillé, il a pris le temps de développer — reprends le POINT CLÉ, pas tout';
+        else tonAnalysis = 'TON: neutre/détendu';
+        mediaContext = `[VOCAL ÉCOUTÉ. Ce qu'il dit: "${mediaProcessedText}"]\n${tonAnalysis}\n${hasQuestion ? 'Il pose une question → RÉPONDS-Y DIRECT.' : 'Rebondis sur le point le plus important.'}\nJAMAIS mentionner "transcription" ou "vocal". Tu l'as ENTENDU, point.`;
+        console.log(`[V73] ✅ Vocal transcrit+analysé: "${mediaProcessedText.substring(0, 80)}" | ${tonAnalysis}`);
       }
     } else if (media.type === 'image' && media.url) {
       console.log(`[V69] 📸 Image détectée par Content-Type: ${media.url.substring(0, 80)}`);
       const imageDesc = await describeImage(media.url);
       if (imageDesc) {
         mediaProcessedText = imageDesc;
-        mediaContext = `[Le prospect a envoyé une IMAGE. Ce que tu vois: "${imageDesc}"]\nRéponds comme si tu VOYAIS l'image. JAMAIS mentionner "description", "analyse d'image", "intelligence artificielle". Tu VOIS l'image, point. Commente naturellement ce que tu observes.`;
-        console.log(`[V69] ✅ Image décrite: "${imageDesc.substring(0, 80)}"`);
+        // V73: Analyse enrichie de l'image — contexte, intention, points d'acte
+        const isScreenshot = /écran|screenshot|texte|message|conversation|notification/i.test(imageDesc);
+        const isSelfie = /homme|femme|personne|selfie|visage|sourire/i.test(imageDesc);
+        const isWork = /bureau|ordinateur|travail|salon|coiffure|client|commerce/i.test(imageDesc);
+        const isResults = /chiffre|nombre|statistique|résultat|argent|euro|dollar/i.test(imageDesc);
+        let imgContext = '';
+        if (isScreenshot) imgContext = 'SCREENSHOT — le prospect montre quelque chose de précis. Commente ce que tu VOIS dans le screen, pose une question liée.';
+        else if (isResults) imgContext = 'RÉSULTATS/CHIFFRES — il te montre des stats ou de l\'argent. Rebondis dessus: "pas mal ça", "c\'est ton truc ça ?"';
+        else if (isWork) imgContext = 'SON LIEU DE TRAVAIL — il te montre son quotidien. Creuse: "c\'est là que tu passes tes journées ?"';
+        else if (isSelfie) imgContext = 'SELFIE/PHOTO DE LUI — commente un DÉTAIL (style, endroit, énergie). PAS de compliment générique.';
+        else imgContext = 'IMAGE DIVERSE — commente naturellement ce que tu observes, pose une question liée.';
+        mediaContext = `[IMAGE VUE. Description: "${imageDesc}"]\n${imgContext}\nJAMAIS mentionner "description" ou "analyse". Tu VOIS l'image, point.`;
+        console.log(`[V73] ✅ Image décrite+analysée: "${imageDesc.substring(0, 80)}" | ${imgContext.substring(0, 60)}`);
       }
     }
 
@@ -1429,11 +1461,18 @@ export default async function handler(req: Request): Promise<Response> {
       return mcEmpty(); // Yield to let the last message in the batch handle all of them
     }
 
-    // DOUBLE-CHECK: attendre 3s de plus et revérifier (catch les fragments lents)
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    // DOUBLE-CHECK: attendre 5s de plus et revérifier (catch les fragments lents)
+    await new Promise(resolve => setTimeout(resolve, 5000));
     const doubleCheck = await getPendingMessages(platform, userId, savedAt);
     if (doubleCheck.length > 0) {
-      console.log(`[V65] DEBOUNCE DOUBLE-CHECK YIELD: ${doubleCheck.length} late fragment(s)`);
+      console.log(`[V73] DEBOUNCE DOUBLE-CHECK YIELD: ${doubleCheck.length} late fragment(s)`);
+      return mcEmpty();
+    }
+    // V73: TRIPLE-CHECK pour les rafales longues (mecs qui envoient 5+ messages)
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    const tripleCheck = await getPendingMessages(platform, userId, savedAt);
+    if (tripleCheck.length > 0) {
+      console.log(`[V73] DEBOUNCE TRIPLE-CHECK YIELD: ${tripleCheck.length} ultra-late fragment(s)`);
       return mcEmpty();
     }
 
