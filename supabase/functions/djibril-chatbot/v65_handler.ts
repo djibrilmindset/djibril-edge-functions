@@ -907,6 +907,8 @@ function clean(text: string): string {
   r = r.replace(/(à ta portée|tout est possible|c.est un (premier |bon )?pas|t.as déjà (la |ta )réponse|tout à ton honneur|chapeau|bravo|je respecte (ça|ton))/gi, '');
   r = r.replace(/(c.est courageux|ça demande du courage|t.es courageux|belle démarche|belle initiative)/gi, '');
   r = r.replace(/(n.hésite pas|je suis là (pour|si)|tu peux compter sur|n.aie pas peur)/gi, '');
+  // V80 ANTI-MANIÈRES: strip les phrases faux-empathiques/maniérées
+  r = r.replace(/(j.?suis curieux c.?est tout|c.?est tout|j.?te juge pas|je te juge pas|j.?comprends (que tu|ta|ton)|je comprends (que tu|ta|ton)|c.?est normal de|t.?as raison de|j.?respecte (ça|ton|ta)|t.?es méfiant|ta méfiance)/gi, '');
   // V76 ANTI-EXERCICE: strip tout conseil/exercice/action directive
   r = r.replace(/(essaye? de |essaie de |tente de |note |noter |fais une liste|pose[- ]toi la question|demande[- ]toi|prends? le temps de|commence par)/gi, '');
   // Nettoyer si le strip a laissé des virgules/espaces en trop
@@ -1327,7 +1329,9 @@ STYLE DJIBRIL RÉEL (extrait de ses vrais messages):
 - TON: direct, tu commandes presque — "du coup t'en es où", pas "est-ce que tu pourrais me dire où tu en es"
 - JAMAIS: "Je comprends ta situation", "C'est un vrai challenge", "J'apprécie ta transparence", "C'est courageux", "Merci de partager", "ça montre que t'es prêt", "t'es sur la bonne voie", "le fait que tu [verbe] ça montre que", "à ta portée", "c'est un premier pas", "t'as déjà la réponse en toi", "c'est tout à ton honneur", "je respecte ça", "chapeau", "bravo"
 - CES PHRASES = COACH MOTIVATIONNEL GÉNÉRIQUE. Djibril parle PAS comme ça. JAMAIS.
-- À LA PLACE: "j'capte", "c'est chaud", "j'vois le délire", "ah ouais", "ok", "grave", "c'est ça le truc"
+- AUSSI INTERDIT — phrases trop "maniérées" / faux-empathique: "j'comprends que tu sois [émotion]", "j'suis curieux c'est tout", "t'es méfiant", "je comprends ta méfiance", "j'te juge pas", "c'est normal de", "t'as raison de", "j'respecte ça". C'est du COACH DÉGUISÉ. Un pote dit pas ça.
+- VARIÉTÉ OBLIGATOIRE: "j'capte", "grave", "ah ouais", "ok" sont bien MAIS pas à chaque message. Si t'as déjà dit "j'capte" dans tes 3 dernières réponses → INTERDIT de le redire. Varie. "ok", "c'est chaud", "ouais", "j'vois", "ah", "ça", "du coup" — tourne.
+- QUAND LE PROSPECT ENVOIE "?" → réponds DIRECT à ce qu'il attend. Pas de reformulation de son émotion. Il attend une RÉPONSE pas de l'empathie.
 INTERDIT: "Adam", termes internes, markdown, prix de l'offre, Pellabère, Cialdini, récipient, encre, dopamine, funnel.
 ${salamRule}
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN dispo: ${LINK_VALEUR}` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN dispo: ${LINK_LANDING}` : `LIEN dispo: ${CALENDLY_LINK}`}
