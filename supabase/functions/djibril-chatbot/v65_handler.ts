@@ -838,6 +838,8 @@ function clean(text: string): string {
   r = r.replace(/(à ta portée|tout est possible|c.est un (premier |bon )?pas|t.as déjà (la |ta )réponse|tout à ton honneur|chapeau|bravo|je respecte (ça|ton))/gi, '');
   r = r.replace(/(c.est courageux|ça demande du courage|t.es courageux|belle démarche|belle initiative)/gi, '');
   r = r.replace(/(n.hésite pas|je suis là (pour|si)|tu peux compter sur|n.aie pas peur)/gi, '');
+  // V76 ANTI-EXERCICE: strip tout conseil/exercice/action directive
+  r = r.replace(/(essaye? de |essaie de |tente de |note |noter |fais une liste|pose[- ]toi la question|demande[- ]toi|prends? le temps de|commence par)/gi, '');
   // Nettoyer si le strip a laissé des virgules/espaces en trop
   r = r.replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ').trim();
   // ANTI-FUITE: strip termes techniques/instructions qui leakent dans la réponse
@@ -1135,8 +1137,9 @@ MAIS si le prospect pose une VRAIE question (prix, programme, comment ça marche
 Exemple OK: "80j d'accompagnement perso. Tu bosses sur ton mindset et ton business. Mais avant ça, t'en es où toi ?"
 Un DM = un texto à un pote. Pas un paragraphe. Mais un pote qui RÉPOND quand on lui pose une question.
 
-RÈGLE #3 — ZÉRO LEÇON:
+RÈGLE #3 — ZÉRO LEÇON, ZÉRO CONSEIL:
 Tu donnes PAS de valeur en DM. Pas d'insight, pas d'explication, pas de "le vrai truc c'est que", pas de psychologie, pas de métaphore. T'es là pour ÉCOUTER et ORIENTER vers les liens. La valeur = les liens UNIQUEMENT.
+JAMAIS donner un exercice ou une action ("essaye de noter 3 trucs", "fais une liste de", "pose-toi la question de"). C'est des CONSEILS = LEÇON = INTERDIT. Tu ÉCOUTES, tu CREUSES, tu ORIENTES. Point.
 
 RÈGLE #4 — REPRENDS SES MOTS (MIRRORING):
 Utilise ses PROPRES expressions. Il dit "galère" → tu dis "galère". Il dit "bloqué" → tu dis "bloqué".
@@ -1583,6 +1586,26 @@ export default async function handler(req: Request): Promise<Response> {
     if (tripleCheck.length > 0) {
       console.log(`[V73] DEBOUNCE TRIPLE-CHECK YIELD: ${tripleCheck.length} ultra-late fragment(s)`);
       return mcEmpty();
+    }
+
+    // V76: VERROU POST-DEBOUNCE — après 48s d'attente (40+5+3), un AUTRE process a peut-être déjà répondu
+    // On recheck la DB pour voir si un bot_response a été enregistré pendant notre attente
+    const { data: postDebounceCheck } = await supabase.from('conversation_history')
+      .select('bot_response, created_at')
+      .eq('user_id', userId)
+      .neq('bot_response', '__PENDING__')
+      .neq('bot_response', '__ADMIN_TAKEOVER__')
+      .neq('bot_response', '__OUTBOUND__')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (postDebounceCheck && postDebounceCheck.length > 0) {
+      const postDebounceTime = new Date(postDebounceCheck[0].created_at).getTime();
+      const secsSincePostDebounce = (Date.now() - postDebounceTime) / 1000;
+      // Si un AUTRE process a répondu pendant notre debounce (< 60s) → YIELD
+      if (secsSincePostDebounce < 60) {
+        console.log(`[V76] 🛑 VERROU POST-DEBOUNCE: un autre process a répondu il y a ${secsSincePostDebounce.toFixed(1)}s → YIELD`);
+        return mcEmpty();
+      }
     }
 
     // This is the LAST message (no newer pending ones). Gather ALL pending and respond.
