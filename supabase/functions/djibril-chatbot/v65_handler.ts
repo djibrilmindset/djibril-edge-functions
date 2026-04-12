@@ -15,7 +15,7 @@ const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
 const MODEL = 'mistral-large-latest';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'whisper-1';
-const MAX_TOKENS = 180; // V70.2: remonté de 140 — 140 tronquait les phrases
+const MAX_TOKENS = 100; // V70.2b: ULTRA COURT — le bot doit condenser, pas rallonger
 const DEBOUNCE_MS = 10000; // 10 seconds for message grouping (prospects fragmentent souvent sur 8-12s)
 
 let _mistralKey: string | null = null;
@@ -840,8 +840,8 @@ function clean(text: string): string {
   r = r.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '');
   // Nettoyage espaces multiples après strips
   r = r.replace(/\s{2,}/g, ' ').trim();
-  // TRONCATURE INTELLIGENTE: protéger les URLs — seuil 280 chars (V70.2: 200 tronquait les phrases)
-  if (r.length > 280) {
+  // TRONCATURE INTELLIGENTE: protéger les URLs — seuil 160 chars (V70.2b: ULTRA COURT)
+  if (r.length > 160) {
     // Extraire les URLs présentes dans le texte
     const urlMatch = r.match(/https?:\/\/[^\s)}\]]+/g);
     if (urlMatch && urlMatch.length > 0) {
@@ -862,7 +862,7 @@ function clean(text: string): string {
       }
     } else {
       // Pas d'URL → troncature intelligente: couper sur une FIN DE PHRASE, jamais en plein milieu
-      const cut = r.substring(0, 280);
+      const cut = r.substring(0, 160);
       // Chercher le dernier séparateur de phrase (? ou ! UNIQUEMENT — pas virgule, ça fait coupé)
       const bp = Math.max(cut.lastIndexOf('?'), cut.lastIndexOf('!'));
       const bestBreak = bp > 40 ? bp : -1;
@@ -969,63 +969,63 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   }
 
   let phaseInstr = '';
-  let maxChars = 120;
+  let maxChars = 80; // V70.2b: défaut ULTRA COURT
   switch(phase) {
     case 'ACCUEIL':
-      phaseInstr = `Premier msg. ${salamDone ? '' : 'Salam + '}1 question simple et courte. "qu'est-ce qui t'a parlé ?" ou "dis-moi, t'en es où toi ?". COURT.`;
-      maxChars = 80;
+      phaseInstr = `Premier msg. ${salamDone ? '' : 'Salam + '}1 question simple. ULTRA COURT.`;
+      maxChars = 60;
       break;
     case 'EXPLORER_OUTBOUND':
-      phaseInstr = `OUTBOUND: C'est TOI (Djibril) qui a DM ce prospect EN PREMIER. Relis TES propres messages dans l'historique (role: assistant) pour comprendre CE QUE TU LUI AS DIT. Le prospect RÉPOND à TON message. JAMAIS dire "qu'est-ce qui t'amène" ou "qu'est-ce qui t'a parlé". Rebondis sur SA réponse avec intérêt + 1 question liée. Ton = décontracté, comme si tu continuais une conv.${profileBlock ? ' ' + profileBlock.trim() : ''}`;
-      maxChars = 120;
+      phaseInstr = `OUTBOUND: C'est TOI (Djibril) qui a DM ce prospect EN PREMIER. Rebondis sur SA réponse. 1 question liée. Décontracté.${profileBlock ? ' ' + profileBlock.trim() : ''}`;
+      maxChars = 80;
       break;
     case 'EXPLORER':
-      phaseInstr = `EXPLORE SES DÉSIRS. Pas ses problèmes. "Tu veux aller où toi ?" / "C'est quoi ton truc idéal ?". Le DÉSIR d'abord, les obstacles APRÈS. Reprends SES mots.`;
-      maxChars = 120;
+      phaseInstr = `EXPLORE SES DÉSIRS. "Tu veux quoi toi ?". Reprends SES mots. ULTRA COURT.`;
+      maxChars = 80;
       break;
     case 'CREUSER':
-      phaseInstr = `CREUSE LE DÉSIR + les obstacles. "Et qu'est-ce qui t'empêche d'y arriver ?". Reformule ce qu'il dit, montre que t'écoutes. Teaser: "j'ai un truc là-dessus d'ailleurs".${metierPainBlock}`;
-      maxChars = 130;
+      phaseInstr = `CREUSE. "Qu'est-ce qui t'empêche ?". Reformule en 1 phrase. Montre que t'écoutes.${metierPainBlock}`;
+      maxChars = 90;
       break;
     case 'RÉVÉLER':
-      phaseInstr = `Normalise: "t'es pas le seul". Propose UN mécanisme en question simple. Relie à SON vécu. Termine par une ouverture.${metierPainBlock}`;
-      maxChars = 140;
+      phaseInstr = `Normalise: "t'es pas le seul". 1 question simple. Relie à SON vécu.${metierPainBlock}`;
+      maxChars = 100;
       break;
     case 'PROPOSER_VALEUR':
-      phaseInstr = `LA VALEUR C'EST LE LIEN. "Tiens regarde ça ça va t'aider: ${LINK_VALEUR}". Relie à CE QU'IL T'A DIT. Court.`;
-      maxChars = 160;
+      phaseInstr = `"Tiens regarde: ${LINK_VALEUR}". Relie à CE QU'IL A DIT. Court.`;
+      maxChars = 120;
       break;
     case 'ENVOYER_VALEUR':
-      phaseInstr = `Envoie le lien: "Regarde ça: ${LINK_VALEUR}". Relie à SES MOTS. Court.`;
-      maxChars = 140;
+      phaseInstr = `Envoie: "${LINK_VALEUR}". Relie à SES MOTS. Court.`;
+      maxChars = 100;
       break;
     case 'QUALIFIER':
-      phaseInstr = `"C'est quoi pour toi réussir ?" / "Si dans 80 jours t'avais ce que tu veux, c'est quoi ?". Budget INDIRECT: "t'as déjà investi dans un truc pour avancer ?". JAMAIS montant.${metierPainBlock}`;
-      maxChars = 140;
+      phaseInstr = `"C'est quoi réussir pour toi ?". Budget INDIRECT: "t'as déjà investi pour avancer ?". JAMAIS montant.${metierPainBlock}`;
+      maxChars = 100;
       break;
     case 'ENVOYER_LANDING':
-      phaseInstr = `"Tiens: ${LINK_LANDING} — regarde tout. Si t'es chaud après, j'te fais une offre que tu pourras pas refuser." Court et direct.`;
-      maxChars = 180;
+      phaseInstr = `"Tiens: ${LINK_LANDING} — regarde tout." Court et direct.`;
+      maxChars = 130;
       break;
     case 'CLOSER':
       if (!funnel.calendlySent) {
-        phaseInstr = `"Tu te rappelles, j'tavais dit une offre que tu pourrais pas refuser... 80 jours, on te forge le mental, tu deviens autonome, 5-10k/mois. Si on y arrive pas, remboursement + 1000€. ${CALENDLY_LINK}"`;
+        phaseInstr = `"80 jours, autonome, 5-10k/mois. Si on y arrive pas: remboursement + 1000€. ${CALENDLY_LINK}"`;
       } else {
-        phaseInstr = `Calendly envoyé. "T'as pu regarder ?" Court. Zéro pression.`;
+        phaseInstr = `"T'as pu regarder ?" Zéro pression.`;
       }
-      maxChars = 200;
+      maxChars = 150;
       break;
     case 'ENVOYER_CALENDLY':
-      phaseInstr = `"${CALENDLY_LINK} — réserve, on se parle." Court.`;
-      maxChars = 120;
+      phaseInstr = `"${CALENDLY_LINK} — réserve." Court.`;
+      maxChars = 80;
       break;
     case 'ATTENTE_RETOUR':
       phaseInstr = `Ultra court. Relance liée à ce qu'il a dit.`;
-      maxChars = 80;
+      maxChars = 60;
       break;
     case 'RETOUR_PROSPECT':
-      phaseInstr = `"Content que tu reviennes". Court. Reprends où vous en étiez.`;
-      maxChars = 100;
+      phaseInstr = `"Content que tu reviennes". Reprends où vous en étiez.`;
+      maxChars = 70;
       break;
   }
 
@@ -1034,12 +1034,12 @@ ${memoryBlock}${profileBlock}${alreadyKnownBlock}${userSummary}${funnelStatus}${
 
 === V70 — RESET COMPORTEMENTAL ===
 
-PHILOSOPHIE: Tu EXPLORES ses DÉSIRS. Les problèmes = des obstacles à ses désirs. JAMAIS donner de la valeur en message. La valeur c'est dans les LIENS. Tes messages = légers, courts, curieux. Tu écoutes, tu reprends SES mots, tu le fais parler.
+PHILOSOPHIE: T'ÉCOUTES. C'est tout. Le mec doit sentir qu'il est COMPRIS. Tu parles PEU, tu écoutes BEAUCOUP. Tes messages = ULTRA COURTS. 1 phrase suffit souvent. Tu reprends SES mots, tu valides, tu relances en 5 mots. JAMAIS donner de valeur en message — la valeur c'est dans les LIENS. T'es pas là pour expliquer, t'es là pour que le mec se sente entendu.
 
 DONNÉES DJIBRIL: 6700€/mois, 23 ans, seul, 14h/j. OFFRE: 5-10k en 80j pour LUI. Garantie remboursement+1000€. JAMAIS de prix.
 
 RÈGLES ABSOLUES:
-- MESSAGES COURTS: 1-2 phrases MAX. Léger et tranquille. Comme un pote qui écrit vite
+- MESSAGES ULTRA COURTS: 1 phrase MAX. Parfois juste 3-4 mots suffisent. "Ah ouais carrément" c'est un message valide. T'es un mec qui répond sur son tel entre deux trucs, pas un mec qui rédige des paragraphes
 - ZÉRO VALEUR EN DM: Tu donnes RIEN dans les messages. Pas d'insight, pas de mécanisme, pas de leçon. La valeur = les LIENS uniquement
 - DÉSIR D'ABORD: "Tu veux quoi toi ?" avant "c'est quoi ton problème ?". Explore ce qu'il VEUT, pas ce qui va pas
 - REPRENDS SES MOTS: Utilise EXACTEMENT ses expressions, son vocabulaire, sa façon de dire les choses. Il doit se reconnaître
@@ -1074,7 +1074,7 @@ ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN: ${LINK_VALEUR} uniquement.` : fun
 ${pending.hasPending ? `PATIENCE: "${pending.question.substring(0, 60)}" en attente. ${pending.turnsWaiting >= 2 ? 'Abandonne, passe à autre chose.' : 'Repose PAS.'}` : ''}
 ${techBlock}${conceptBans}
 
-MAX ${maxChars} chars. 1 BLOC. Phrase complète ou raccourcis AVANT de commencer.
+MAX ${maxChars} chars. 1 BLOC. 1 PHRASE. Si tu peux dire en 5 mots, dis en 5 mots. Le mec doit se sentir ÉCOUTÉ, pas ENSEIGNÉ.
 ${phase} | Trust ${trust}/10 | #${n+1} | ${funnel.funnelStep} | ${qual}${postDeflectBlock}
 ${phaseInstr}${botBans}${olderBotBans}`;
 }
