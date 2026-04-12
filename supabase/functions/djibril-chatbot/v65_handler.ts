@@ -16,7 +16,7 @@ const MODEL = 'mistral-large-latest';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'whisper-1';
 const MAX_TOKENS = 80; // V74: assez pour 1-2 phrases COMPLÈTES. Le system prompt limite déjà la longueur
-const DEBOUNCE_MS = 40000; // V74: 40s — setter premium, laisse le prospect finir TOUT ce qu'il a à dire
+const DEBOUNCE_MS = 20000; // V77: 20s — équilibre réactivité + batching. 40s était trop lent, les prospects décrochaient
 
 let _mistralKey: string | null = null;
 let _openaiKey: string | null = null;
@@ -1178,6 +1178,11 @@ Si il t'accuse d'être un bot/IA → "frère c'est moi, j'suis entre deux trucs"
 Si il demande un VOCAL → "j'peux pas là, tape-moi ça" ou "j'suis en move, écris" — JAMAIS prétendre que t'envoies un vocal, JAMAIS dire "ça veut pas s'ouvrir" ou "bug de mon côté". T'assumes que tu peux pas vocaler.
 Si il insiste → "j'suis en déplacement, j'tape plus vite" — AUCUN mensonge technique.
 
+RÈGLE #6 — QUAND IL SE PLAINT / EST FRUSTRÉ PAR TES RÉPONSES:
+Si le prospect dit "tu te répètes", "arrête de dire n'importe quoi", "t'as arrêté de répondre comme un singe", "tu réponds pas à ma question", "c'est quoi ces réponses" → c'est QU'IL EST FRUSTRÉ par comment tu lui parles.
+Tu dois: 1) Reconnaître DIRECT: "Excuse frérot", "My bad", "Ouais j'étais à côté" 2) RÉPONDRE à ce qu'il avait VRAIMENT demandé — relis le DERNIER msg qu'il t'avait envoyé AVANT sa plainte et RÉPONDS-Y. 3) JAMAIS ignorer sa frustration. JAMAIS balancer un truc random. JAMAIS le psychanalyser ("t'as l'impression d'être coincé") quand il te dit juste que tu réponds mal.
+C'est la PRIORITÉ ABSOLUE: si le prospect se plaint de tes réponses, tu reconnais et tu corriges. Un setter qui ignore ça = il perd le prospect INSTANTANÉMENT.
+
 RÈGLE #6 — CONTENU INAPPROPRIÉ:
 Si le mec parle de porno, drogue, violence, trucs chelous → redirige en 1 phrase: "c'est ton délire, moi j'parle business" ou "chacun son truc". JAMAIS t'engager dans le sujet. JAMAIS juger non plus. Switch direct sur son activité/objectif.
 
@@ -1571,9 +1576,9 @@ export default async function handler(req: Request): Promise<Response> {
           .order('created_at', { ascending: false })
           .limit(1);
         const lastMsg = lastUserMsg?.[0]?.user_message || '';
-        // Si le message est identique OU si le bot a répondu il y a <15s (doublon ManyChat), yield
-        if (secsSinceLastResponse < 15 || lastMsg === userMessage) {
-          console.log(`[V75] 🛑 ANTI-DOUBLON: bot a répondu il y a ${secsSinceLastResponse.toFixed(1)}s, msg=${lastMsg === userMessage ? 'IDENTIQUE' : 'DIFF'} → YIELD`);
+        // V77: ANTI-DOUBLON aligné sur debounce (20s) + protection identique
+        if (secsSinceLastResponse < (DEBOUNCE_MS / 1000) || lastMsg === userMessage) {
+          console.log(`[V77] 🛑 ANTI-DOUBLON: bot a répondu il y a ${secsSinceLastResponse.toFixed(1)}s (seuil=${DEBOUNCE_MS/1000}s), msg=${lastMsg === userMessage ? 'IDENTIQUE' : 'DIFF'} → YIELD`);
           return mcEmpty();
         }
       }
@@ -1830,7 +1835,7 @@ export default async function handler(req: Request): Promise<Response> {
     if (qual === 'low_budget' || qual === 'disqualified_budget') {
       if (/https?:\/\//i.test(response)) { response = response.replace(/https?:\/\/[^\s]+/gi, '').trim(); console.log('[V65] STRIPPED all links (low/disq budget)'); }
     }
-    // V75: ANTI-RÉPÉTITION FINALE — relit la DB JUSTE avant d'envoyer pour vérifier qu'on envoie pas un doublon
+    // V77: ANTI-RÉPÉTITION FINALE RENFORCÉE — relit les 5 dernières réponses, seuil plus bas (0.3)
     const { data: lastBotCheck } = await supabase.from('conversation_history')
       .select('bot_response')
       .eq('user_id', userId)
@@ -1838,17 +1843,25 @@ export default async function handler(req: Request): Promise<Response> {
       .neq('bot_response', '__ADMIN_TAKEOVER__')
       .neq('bot_response', '__OUTBOUND__')
       .order('created_at', { ascending: false })
-      .limit(3);
+      .limit(5);
     if (lastBotCheck && lastBotCheck.length > 0) {
       const lastResponses = lastBotCheck.map(r => r.bot_response || '');
-      for (const lastR of lastResponses) {
-        if (lastR && calculateSimilarity(response, lastR) > 0.4) {
-          console.log(`[V75] 🛑 ANTI-RÉPÉTITION FINALE: "${response.substring(0, 40)}" trop similaire à "${lastR.substring(0, 40)}" → FALLBACK`);
-          // Générer un fallback FRAIS qui est DIFFÉRENT
-          const freshFallbacks = ["Du coup t'en es où", "Genre comment ça", "Et du coup", "Ah ouais", "Ok j'capte", "C'est-à-dire", "Mmh vas-y", "Clairement", "T'en es où du coup", "Développe"];
-          const availFresh = freshFallbacks.filter(f => !lastResponses.some(lr => calculateSimilarity(f, lr) > 0.2));
-          response = (availFresh.length ? availFresh : freshFallbacks)[Date.now() % (availFresh.length || freshFallbacks.length)];
-          break;
+      // V77: Check EXACT match first (même texte = doublon évident)
+      if (lastResponses.includes(response)) {
+        console.log(`[V77] 🛑 ANTI-RÉPÉTITION: EXACT MATCH détecté → FALLBACK`);
+        const freshFallbacks = ["Du coup t'en es où", "Genre comment ça", "Et du coup", "Ah ouais ?", "C'est-à-dire ?", "Mmh vas-y", "Clairement", "T'en es où du coup", "Développe", "En vrai ?"];
+        const availFresh = freshFallbacks.filter(f => !lastResponses.some(lr => calculateSimilarity(f, lr) > 0.15));
+        response = (availFresh.length ? availFresh : freshFallbacks)[Date.now() % (availFresh.length || freshFallbacks.length)];
+      } else {
+        // V77: Check similarity (seuil abaissé de 0.4 à 0.3)
+        for (const lastR of lastResponses) {
+          if (lastR && calculateSimilarity(response, lastR) > 0.3) {
+            console.log(`[V77] 🛑 ANTI-RÉPÉTITION FINALE: "${response.substring(0, 40)}" trop similaire à "${lastR.substring(0, 40)}" (sim>${calculateSimilarity(response, lastR).toFixed(2)}) → FALLBACK`);
+            const freshFallbacks = ["Du coup t'en es où", "Genre comment ça", "Et du coup", "Ah ouais ?", "C'est-à-dire ?", "Mmh vas-y", "Clairement", "T'en es où du coup", "Développe", "En vrai ?"];
+            const availFresh = freshFallbacks.filter(f => !lastResponses.some(lr => calculateSimilarity(f, lr) > 0.15));
+            response = (availFresh.length ? availFresh : freshFallbacks)[Date.now() % (availFresh.length || freshFallbacks.length)];
+            break;
+          }
         }
       }
     }
