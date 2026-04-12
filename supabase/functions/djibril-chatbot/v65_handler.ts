@@ -850,6 +850,19 @@ function clean(text: string): string {
   r = r.replace(/^[-*]\s+/gm, '');         // - listes → rien
   // ANTI-EMOJI: strip TOUS les émojis — Djibril parle comme un mec, pas un CM
   r = r.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '');
+  // ANTI-PONCTUATION BIZARRE: seulement virgules, points d'interrogation et apostrophes autorisés
+  // Strip points d'exclamation
+  r = r.replace(/!/g, '');
+  // Strip points-virgules et deux-points
+  r = r.replace(/[;:]/g, ',');
+  // Strip parenthèses, crochets, accolades
+  r = r.replace(/[(){}\[\]]/g, '');
+  // Strip guillemets doubles et chevrons (garder apostrophes)
+  r = r.replace(/[""«»"]/g, '');
+  // Strip caractères spéciaux bizarres (garder lettres FR, chiffres, virgule, ?, apostrophe, espace, /)
+  r = r.replace(/[^\wàâäéèêëïîôùûüÿçœæÀÂÄÉÈÊËÏÎÔÙÛÜŸÇŒÆ\s,?''\-\/\.]/g, '');
+  // Strip tirets isolés (garder ceux dans les mots comme peut-être)
+  r = r.replace(/\s-\s/g, ', ').replace(/\s-$/g, '').replace(/^-\s/g, '');
   // Nettoyage espaces multiples après strips
   r = r.replace(/\s{2,}/g, ' ').trim();
   // TRONCATURE INTELLIGENTE: protéger les URLs — seuil 200 (assez court + protège les URLs)
@@ -1072,7 +1085,11 @@ RÈGLES ABSOLUES:
 - OUTBOUND ≠ INBOUND: Si c'est TOI qui l'as DM → il a pas le temps, va droit au but, propose vite. Si c'est LUI qui t'a DM → prends le temps, fais-le parler, explore. DEUX STYLES DIFFÉRENTS
 - "Adam" INTERDIT. JAMAIS de prix. ${salamRule}
 
-STYLE BANLIEUE: Contractions (j'sais, t'as, j'fais, y'a, j'capte ~50%). Simple. Respectueux mais proche. Pas un thug, un grand frère de quartier. Zéro émoji. Zéro point final. Zéro formatage. ZÉRO TROIS POINTS ("...") — jamais de "..." dans tes messages, c'est un tic de chatbot.
+STYLE — BANLIEUE PARISIENNE MAIS BIEN PARLÉ:
+Tu parles comme un jeune de banlieue parisienne qui a de la culture et du vocabulaire. Le genre de mec qui pourrait passer devant un jury de la Sorbonne ou de l'ENA sans se faire griller, parce qu'il parle bien, mais qui garde son identité de quartier. Pas un thug, pas un académicien, un mec cultivé du 93 qui sait placer ses mots.
+Contractions naturelles (j'sais, t'as, j'fais, y'a, j'capte, t'façon, j'te dis ~50%). Phrases fluides, jamais saccadées. Tu peux utiliser un mot soutenu de temps en temps si ça sonne naturel dans la phrase, mais tu restes ancré banlieue.
+PONCTUATION: Virgules et points d'interrogation UNIQUEMENT. Zéro point final. Zéro point d'exclamation. Zéro trois points ("..."). Zéro tiret. Zéro point-virgule. Zéro émoji. Zéro caractère spécial. C'est un DM, pas une rédaction.
+ZÉRO FORMATAGE: Pas de gras, pas d'italique, pas de liste, pas de numérotation, pas de retour à la ligne.
 
 VARIATION OUVERTURE — CRITIQUE:
 Chaque message doit commencer DIFFÉREMMENT. JAMAIS 2 messages qui commencent pareil. Lis tes 5 derniers messages et commence AUTREMENT. T'es un humain — un humain commence jamais ses textos pareil.
@@ -1229,7 +1246,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
       console.error('[V65] API error:', JSON.stringify(result).substring(0, 200));
     } catch (e: any) { console.error('[V65] error:', e.message); }
   }
-  const fallbacks = ["Dis-moi en plus, j'écoute", "Continue je veux comprendre ton truc", "Intéressant ce que tu dis, développe ?", "J'entends, et du coup t'en es où concrètement ?", "Ok je vois, c'est quoi la suite idéale pour toi ?", "Merci de partager ça, qu'est-ce qui t'aiderait le plus là maintenant ?"];
+  const fallbacks = ["Vas-y développe j'écoute", "Ah ouais, et du coup t'en es où concrètement", "Continue j'veux capter ton truc", "Genre concrètement ça donne quoi", "Ok j'vois le tableau, c'est quoi la suite pour toi", "Intéressant ça, t'as déjà essayé un truc ou pas"];
   // Choisir un fallback différent de ceux déjà envoyés
   const usedFallbacks = recentResponses.map(r => r.toLowerCase());
   const available = fallbacks.filter(f => !usedFallbacks.some(u => calculateSimilarity(f, u) > 0.2));
