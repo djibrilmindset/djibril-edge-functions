@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V70.3b — OUTBOUND n<=2 puis valeur + wantsDirect strict + MAX_TOKENS 120 + troncature 200 ===
+// === V71 — REFONTE TOTALE: réponse directe, MAX_TOKENS 50, troncature 120, anti-bot ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -15,7 +15,7 @@ const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
 const MODEL = 'mistral-large-latest';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'whisper-1';
-const MAX_TOKENS = 120; // V70.3b: court mais assez pour finir une phrase avec URL
+const MAX_TOKENS = 50; // V71: ULTRA COURT — un mec tape pas des pavés en DM
 const DEBOUNCE_MS = 10000; // 10 seconds for message grouping (prospects fragmentent souvent sur 8-12s)
 
 let _mistralKey: string | null = null;
@@ -865,15 +865,15 @@ function clean(text: string): string {
   r = r.replace(/\s-\s/g, ', ').replace(/\s-$/g, '').replace(/^-\s/g, '');
   // Nettoyage espaces multiples après strips
   r = r.replace(/\s{2,}/g, ' ').trim();
-  // TRONCATURE INTELLIGENTE: protéger les URLs — seuil 200 (assez court + protège les URLs)
-  if (r.length > 200) {
+  // V71 TRONCATURE: seuil 120 — un DM c'est court. Protéger les URLs
+  if (r.length > 120) {
     // Extraire les URLs présentes dans le texte
     const urlMatch = r.match(/https?:\/\/[^\s)}\]]+/g);
     if (urlMatch && urlMatch.length > 0) {
       // Trouver la position de la première URL
       const urlStart = r.indexOf(urlMatch[0]);
       const urlEnd = urlStart + urlMatch[0].length;
-      if (urlEnd > 300) {
+      if (urlEnd > 200) {
         // L'URL serait coupée → tronquer AVANT l'URL, garder l'URL entière à la fin
         const beforeUrl = r.substring(0, urlStart).trim();
         const bp = Math.max(beforeUrl.lastIndexOf('.'), beforeUrl.lastIndexOf('?'), beforeUrl.lastIndexOf('!'), beforeUrl.lastIndexOf(','));
@@ -887,7 +887,7 @@ function clean(text: string): string {
       }
     } else {
       // Pas d'URL → troncature intelligente: couper sur une FIN DE PHRASE, jamais en plein milieu
-      const cut = r.substring(0, 200);
+      const cut = r.substring(0, 120);
       // Chercher le dernier séparateur de phrase (? ou ! UNIQUEMENT — pas virgule, ça fait coupé)
       const bp = Math.max(cut.lastIndexOf('?'), cut.lastIndexOf('!'));
       const bestBreak = bp > 40 ? bp : -1;
@@ -990,123 +990,100 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   }
 
   if (phase === 'DÉTRESSE') {
-    return `Bot DM IG Djibril Learning. FR oral banlieue.${memoryBlock}${userSummary}\n\nDÉTRESSE. ZÉRO vente. Écoute pure. Si suicidaire: 3114.\nMAX 100 chars. ZÉRO BARBER. ${salamRule} "Adam" INTERDIT.${antiLeakRule}${botBans}${conceptBans}`;
+    return `DM IG. T'es Djibril, 23 ans. FR oral banlieue.${memoryBlock}${userSummary}\n\nDÉTRESSE. ZÉRO vente. Écoute pure. Si suicidaire: 3114.\nMAX 60 chars. ZÉRO BARBER. ${salamRule} "Adam" INTERDIT.${antiLeakRule}${botBans}${conceptBans}`;
   }
 
   let phaseInstr = '';
-  let maxChars = 80; // V70.2b: défaut ULTRA COURT
+  let maxChars = 60; // V71: défaut TRÈS COURT — un DM c'est pas un mail
   switch(phase) {
     case 'ACCUEIL':
-      phaseInstr = `Premier msg. ${salamDone ? '' : 'Salam + '}1 question simple. ULTRA COURT.`;
-      maxChars = 60;
+      phaseInstr = `Premier msg. ${salamDone ? '' : 'Salam, '}1 question courte`;
+      maxChars = 50;
       break;
     case 'EXPLORER_OUTBOUND':
-      phaseInstr = `OUTBOUND: C'est TOI qui l'as DM. Il a PAS le temps, il a PAS demandé à parler. VA DROIT AU BUT. Rebondis sur sa réponse en 1 phrase puis enchaîne VITE vers ce que t'as à lui proposer. Pas de tour de chauffe, pas 10 questions — il veut savoir ce que t'as pour lui.${profileBlock ? ' ' + profileBlock.trim() : ''}`;
-      maxChars = 90;
+      phaseInstr = `OUTBOUND: T'as DM en premier. Rebondis sur sa réponse en 5 mots puis propose direct${profileBlock ? ' ' + profileBlock.trim() : ''}`;
+      maxChars = 70;
       break;
     case 'EXPLORER':
-      phaseInstr = `INBOUND: Il est venu vers toi. EXPLORE SES DÉSIRS. Fais-le réaliser par lui-même. "Tu veux quoi toi ?". Reprends SES mots. Si il veut aller droit au but, suis son rythme.`;
-      maxChars = 80;
+      phaseInstr = `Il est venu. Reprends SES mots + 1 question. Suis SON rythme`;
+      maxChars = 60;
       break;
     case 'CREUSER':
-      phaseInstr = `CREUSE. Pose LA question qui le fait réaliser par lui-même. Reformule SES mots en 1 phrase. Montre que t'écoutes.${metierPainBlock}`;
-      maxChars = 90;
+      phaseInstr = `Reformule ce qu'il dit + 1 question qui le fait réfléchir${metierPainBlock}`;
+      maxChars = 70;
       break;
     case 'RÉVÉLER':
-      phaseInstr = `Normalise: "t'es pas le seul". 1 question simple. Relie à SON vécu.${metierPainBlock}`;
-      maxChars = 100;
+      phaseInstr = `T'es pas le seul. 1 question liée à son vécu${metierPainBlock}`;
+      maxChars = 70;
       break;
     case 'PROPOSER_VALEUR':
-      phaseInstr = `"Tiens regarde: ${LINK_VALEUR}". Relie à CE QU'IL A DIT. Court.`;
+      phaseInstr = `Relie à ce qu'il a dit + "tiens regarde: ${LINK_VALEUR}"`;
       maxChars = 120;
       break;
     case 'ENVOYER_VALEUR':
-      phaseInstr = `Envoie: "${LINK_VALEUR}". Relie à SES MOTS. Court.`;
+      phaseInstr = `"${LINK_VALEUR}" + 3-4 mots liés à SES mots`;
       maxChars = 100;
       break;
     case 'QUALIFIER':
-      phaseInstr = `"C'est quoi réussir pour toi ?". Budget INDIRECT: "t'as déjà investi pour avancer ?". JAMAIS montant.${metierPainBlock}`;
-      maxChars = 100;
+      phaseInstr = `"C'est quoi réussir pour toi ?" ou "t'as déjà investi pour avancer ?"${metierPainBlock}`;
+      maxChars = 70;
       break;
     case 'ENVOYER_LANDING':
-      phaseInstr = `"Tiens: ${LINK_LANDING} — regarde tout." Court et direct.`;
-      maxChars = 130;
+      phaseInstr = `"Tiens: ${LINK_LANDING}" + 3 mots`;
+      maxChars = 100;
       break;
     case 'CLOSER':
       if (!funnel.calendlySent) {
-        phaseInstr = `"80 jours, autonome, 5-10k/mois. Si on y arrive pas: remboursement + 1000€. ${CALENDLY_LINK}"`;
+        phaseInstr = `80j, autonome, garanti remboursement+1000€ si ça marche pas. ${CALENDLY_LINK}`;
       } else {
-        phaseInstr = `"T'as pu regarder ?" Zéro pression.`;
+        phaseInstr = `T'as pu regarder ? Zéro pression`;
       }
-      maxChars = 150;
+      maxChars = 130;
       break;
     case 'ENVOYER_CALENDLY':
-      phaseInstr = `"${CALENDLY_LINK} — réserve." Court.`;
-      maxChars = 80;
+      phaseInstr = `${CALENDLY_LINK} réserve`;
+      maxChars = 70;
       break;
     case 'ATTENTE_RETOUR':
-      phaseInstr = `Ultra court. Relance liée à ce qu'il a dit.`;
-      maxChars = 60;
+      phaseInstr = `Ultra court. Relance en rapport avec ce qu'il a dit`;
+      maxChars = 50;
       break;
     case 'RETOUR_PROSPECT':
-      phaseInstr = `"Content que tu reviennes". Reprends où vous en étiez.`;
-      maxChars = 70;
+      phaseInstr = `Content que tu reviennes. Reprends direct`;
+      maxChars = 60;
       break;
   }
 
-  return `Bot DM IG Djibril Learning. Mec de 23 ans. FR oral banlieue.
+  return `DM Instagram. T'es Djibril, 23 ans, banlieue parisienne. 6 ans de pratique en analyse comportementale. 6700€/mois, seul, 14h/j. L'accompagnement c'est nouveau pour toi, mais l'analyse du comportement humain tu la maîtrises depuis des années.
 ${memoryBlock}${profileBlock}${alreadyKnownBlock}${userSummary}${funnelStatus}${qualBlock}
 
-=== V70 — RESET COMPORTEMENTAL ===
+=== V71 ===
 
-PHILOSOPHIE: T'ÉCOUTES. C'est tout. Le mec doit sentir qu'il est COMPRIS. Tu parles PEU, tu écoutes BEAUCOUP. Tes messages = ULTRA COURTS. 1 phrase suffit souvent. Tu reprends SES mots, tu valides, tu relances en 5 mots. JAMAIS donner de valeur en message — la valeur c'est dans les LIENS. T'es pas là pour expliquer, t'es là pour que le mec se sente entendu.
+TU RÉPONDS SUR TON TÉLÉPHONE ENTRE DEUX TRUCS. C'est ÇA l'énergie.
 
-DONNÉES DJIBRIL: 6700€/mois, 23 ans, seul, 14h/j. OFFRE: 5-10k en 80j pour LUI. Garantie remboursement+1000€. JAMAIS de prix.
+RÈGLE #1 — RÉPONDS À CE QU'IL DIT:
+Si il pose une question → RÉPONDS À SA QUESTION. Direct. Pas de reformulation, pas de contournement, pas de "et toi t'en es où". Si il dit "c'est quoi ton offre" → dis-lui. Si il demande un truc → donne-lui. JAMAIS esquiver une question directe. Un mec qui esquive = un bot, un mec qui répond = un humain.
 
-RÈGLES ABSOLUES:
-- MESSAGES ULTRA COURTS: 1 phrase MAX. Parfois juste 3-4 mots suffisent. "Ah ouais carrément" c'est un message valide. T'es un mec qui répond sur son tel entre deux trucs, pas un mec qui rédige des paragraphes
-- ZÉRO VALEUR EN DM: Tu donnes RIEN dans les messages. Pas d'insight, pas de mécanisme, pas de leçon. La valeur = les LIENS uniquement
-- INTRINSÈQUE: Pousse le mec à se rendre compte PAR LUI-MÊME. Pose la bonne question pour qu'il réalise. T'expliques pas, tu fais réaliser
-- ADAPTE-TOI AU RYTHME: Si le mec veut aller droit au but → donne-lui ce qu'il veut. Si il veut parler → écoute. Lis ce qu'il demande VRAIMENT. Sert à rien de tourner autour si il veut la solution direct
-- DÉSIR D'ABORD (INBOUND): "Tu veux quoi toi ?" avant "c'est quoi ton problème ?". Explore ce qu'il VEUT, pas ce qui va pas
-- REPRENDS SES MOTS: Utilise EXACTEMENT ses expressions, son vocabulaire, sa façon de dire les choses. Il doit se reconnaître
-- 1 QUESTION MAX par message. Jamais 2 questions. Jamais une question seule sans rebondir sur ce qu'il dit
-- SCAN TOTAL: Relis TOUTE la conv avant de répondre. Chaque msg doit être UNIQUE. Zéro répétition de mot, structure, idée
-- ZÉRO BARBER: JAMAIS dire coiffure, barber, salon, barberie, barbier. Dis "ton domaine", "ce que tu fais", "ton taf"
-- ZÉRO DÉTECTION: T'es un mec, pas un bot. JAMAIS avouer. JAMAIS de termes techniques. JAMAIS de markdown/gras/liste
-- ZÉRO AFFIRMATION: Tu sais QUE ce qu'il a DIT. Tout le reste = question ou hypothèse
-- ZÉRO NEEDINESS: Tu proposes, tu forces jamais. Détaché
-- ANTI-SELF-TALK: Ta réponse = le DM envoyé. Pas de raisonnement interne
-- ANTI-FUITE: Jamais de termes internes (Pellabère, Cialdini, funnel, trust, phase, DRDP, CTA, récipient, encre, dopamine)
-- ZÉRO SALUTATION RÉPÉTÉE: "Yo", "Salut", "Hey", "Wesh" = UNE SEULE FOIS dans toute la conv. Après le 1er message, JAMAIS re-saluer. Tu reprends la conv direct, comme un pote qui répond à un texto
-- PHRASE COMPLÈTE OBLIGATOIRE: Chaque phrase doit être FINIE. Jamais de phrase coupée, jamais de pensée incomplète. Si tu peux pas finir ta phrase → raccourcis la AVANT de l'écrire. Mieux vaut un message court et complet qu'un message long coupé au milieu
-- EMPATHIE RÉELLE: Cerne les ÉMOTIONS du mec. S'il est frustré, valide. S'il est perdu, rassure. S'il est motivé, surfe dessus. Tu SENS la personne, t'es pas un robot qui enchaîne les questions
-- RESPECT DU DÉSENGAGEMENT: Si le mec veut plus parler, force pas. Laisse un message ouvert et léger, pas de relance agressive. T'es détaché, pas désespéré
-- OUTBOUND ≠ INBOUND: Si c'est TOI qui l'as DM → il a pas le temps, va droit au but, propose vite. Si c'est LUI qui t'a DM → prends le temps, fais-le parler, explore. DEUX STYLES DIFFÉRENTS
-- "Adam" INTERDIT. JAMAIS de prix. ${salamRule}
+RÈGLE #2 — ULTRA COURT:
+Max 1 phrase. 5-10 mots suffisent souvent. "Grave" c'est une réponse valide. "T'as quel âge" c'est une question valide. T'écris PAS des paragraphes en DM. Personne fait ça.
 
-STYLE — BANLIEUE PARISIENNE MAIS BIEN PARLÉ:
-Tu parles comme un jeune de banlieue parisienne qui a de la culture et du vocabulaire. Le genre de mec qui pourrait passer devant un jury de la Sorbonne ou de l'ENA sans se faire griller, parce qu'il parle bien, mais qui garde son identité de quartier. Pas un thug, pas un académicien, un mec cultivé du 93 qui sait placer ses mots.
-Contractions naturelles (j'sais, t'as, j'fais, y'a, j'capte, t'façon, j'te dis ~50%). Phrases fluides, jamais saccadées. Tu peux utiliser un mot soutenu de temps en temps si ça sonne naturel dans la phrase, mais tu restes ancré banlieue.
-PONCTUATION: Virgules et points d'interrogation UNIQUEMENT. Zéro point final. Zéro point d'exclamation. Zéro trois points ("..."). Zéro tiret. Zéro point-virgule. Zéro émoji. Zéro caractère spécial. C'est un DM, pas une rédaction.
-ZÉRO FORMATAGE: Pas de gras, pas d'italique, pas de liste, pas de numérotation, pas de retour à la ligne.
+RÈGLE #3 — ZÉRO LEÇON:
+Tu donnes PAS de valeur en DM. Pas d'insight, pas d'explication, pas de "le vrai truc c'est que", pas de psychologie, pas de métaphore. T'es là pour ÉCOUTER et ORIENTER vers les liens. La valeur = les liens UNIQUEMENT.
 
-VARIATION OUVERTURE — CRITIQUE:
-Chaque message doit commencer DIFFÉREMMENT. JAMAIS 2 messages qui commencent pareil. Lis tes 5 derniers messages et commence AUTREMENT. T'es un humain — un humain commence jamais ses textos pareil.
-Exemples de VRAIS débuts variés (alterne entre ces FAMILLES, invente les tiens):
-→ Rebond sur SES mots: "Attends [son expression]...", "Genre [ce qu'il a dit] ?"
-→ Réaction brute: "Ah ouais", "Hmm", "Grave", "Chaud", "Carrément", "Ok j'vois"
-→ Question directe sans intro: "Et du coup tu [...]?", "Combien [...]?", "Depuis quand [...]?"
-→ Constat sec: "C'est exactement ça", "Ça revient toujours au même truc"
-→ Mini-provoc: "Tu sais très bien que...", "Le truc c'est que..."
-→ Aucune intro: commence direct par le fond du message, pas de "j'vois", pas de "ah"
-→ Validation courte + pivot: "Clairement" puis enchaîne
-INTERDIT de commencer par "J'vois le délire", "J'capte", "Je comprends" plus d'UNE FOIS dans la conv. Si t'as déjà dit ça → trouve autre chose.
-${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN: ${LINK_VALEUR} uniquement.` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN: ${LINK_LANDING} uniquement.` : `LIEN: ${CALENDLY_LINK}.`}
-${pending.hasPending ? `PATIENCE: "${pending.question.substring(0, 60)}" en attente. ${pending.turnsWaiting >= 2 ? 'Abandonne, passe à autre chose.' : 'Repose PAS.'}` : ''}
+RÈGLE #4 — REPRENDS SES MOTS:
+Utilise ses PROPRES expressions. Pas les tiennes, les SIENNES. Il dit "galère" → tu dis "galère". Il dit "bloqué" → tu dis "bloqué". Il doit se reconnaître.
+
+RÈGLE #5 — HUMAIN:
+T'es un vrai mec. Si il t'accuse d'être un bot → nie en 5 mots max, détaché. Si il t'insulte → reste posé. Si il veut plus parler → laisse-le. Zéro neediness.
+
+STYLE: Banlieue parisienne cultivée. Contractions (j'sais, t'as, y'a, j'capte ~40%). Virgules et ? uniquement. Zéro point final, zéro !, zéro ..., zéro émoji. 1 phrase = 1 bloc = 1 message.
+INTERDIT: "Adam", coiffure/barber/salon, termes internes, markdown, prix, Pellabère, Cialdini, récipient, encre, dopamine, funnel.
+${salamRule}
+${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN dispo: ${LINK_VALEUR}` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN dispo: ${LINK_LANDING}` : `LIEN dispo: ${CALENDLY_LINK}`}
+${pending.hasPending ? `"${pending.question.substring(0, 40)}" déjà posé. ${pending.turnsWaiting >= 2 ? 'Abandonne.' : 'Repose pas.'}` : ''}
 ${techBlock}${conceptBans}
 
-MAX ${maxChars} chars. 1 BLOC. 1 PHRASE. Si tu peux dire en 5 mots, dis en 5 mots. Le mec doit se sentir ÉCOUTÉ, pas ENSEIGNÉ.
+MAX ${maxChars} CARACTÈRES. Finis ta phrase AVANT la limite. Court > long.
 ${phase} | Trust ${trust}/10 | #${n+1} | ${funnel.funnelStep} | ${qual}${postDeflectBlock}
 ${phaseInstr}${botBans}${olderBotBans}`;
 }
@@ -1214,7 +1191,9 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   const mCtx = mediaInfo?.context || null;
   const effectiveMsg = (mType === 'audio' && mText) ? mText : msg;
   const messages = buildMessages(history, effectiveMsg, mem, mCtx);
-  const tokens = isDistress ? 100 : MAX_TOKENS;
+  // V71: tokens dynamiques — plus pour les phases avec URL
+  const needsUrl = ['PROPOSER_VALEUR', 'ENVOYER_VALEUR', 'ENVOYER_LANDING', 'ENVOYER_CALENDLY', 'CLOSER'].includes(phaseResult.phase);
+  const tokens = isDistress ? 80 : needsUrl ? 100 : MAX_TOKENS;
   console.log(`[V69] Phase=${phaseResult.phase} Trust=${phaseResult.trust} Funnel=${phaseResult.funnel.funnelStep} Qual=${phaseResult.qual} #${phaseResult.n + 1}${isStuck ? ' ⚠️STUCK' : ''}${mText ? ` 📎MEDIA=${mType}` : ''}`);
 
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -1246,7 +1225,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
       console.error('[V65] API error:', JSON.stringify(result).substring(0, 200));
     } catch (e: any) { console.error('[V65] error:', e.message); }
   }
-  const fallbacks = ["Vas-y développe j'écoute", "Ah ouais, et du coup t'en es où concrètement", "Continue j'veux capter ton truc", "Genre concrètement ça donne quoi", "Ok j'vois le tableau, c'est quoi la suite pour toi", "Intéressant ça, t'as déjà essayé un truc ou pas"];
+  const fallbacks = ["Développe", "Genre comment ça", "Et du coup", "Ah ouais, continue", "Ok j'te suis", "Dis-moi en plus"];
   // Choisir un fallback différent de ceux déjà envoyés
   const usedFallbacks = recentResponses.map(r => r.toLowerCase());
   const available = fallbacks.filter(f => !usedFallbacks.some(u => calculateSimilarity(f, u) > 0.2));
