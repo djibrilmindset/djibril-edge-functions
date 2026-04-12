@@ -221,7 +221,19 @@ function getTechniquesForPhase(phase: string): string {
 }
 
 function mcRes(text: string): Response {
-  return new Response(JSON.stringify({ version: "v2", content: { messages: [{ type: "text", text }] } }),
+  // V75: Multi-messages — si le texte contient un séparateur naturel (? suivi de phrase, ou \n), split en 2-3 DM
+  const messages: Array<{type: string; text: string}> = [];
+  // Split sur les points d'interrogation suivis d'une nouvelle pensée, ou sur les \n
+  const parts = text.split(/(?<=\?)\s+(?=[A-ZÀ-Ÿa-zà-ÿ])|(?<=,)\s+(?=(?:et |mais |du coup |genre |en fait |parce que ))/i)
+    .filter(p => p.trim().length > 0);
+  if (parts.length >= 2 && parts.length <= 4) {
+    for (const part of parts) {
+      messages.push({ type: "text", text: part.trim() });
+    }
+  } else {
+    messages.push({ type: "text", text });
+  }
+  return new Response(JSON.stringify({ version: "v2", content: { messages } }),
     { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
 }
 function mcEmpty(): Response {
@@ -897,22 +909,20 @@ function clean(text: string): string {
         r = bp > 0 ? r.substring(0, urlEnd + bp + 1).trim() : r.substring(0, Math.min(r.length, urlEnd + 50)).trim();
       }
     } else {
-      // V72: troncature intelligente — couper sur fin de phrase ou virgule, JAMAIS en plein mot/idée
-      const cut = r.substring(0, 130);
-      // Priorité 1: dernier ? (fin de question = break naturel)
-      const qMark = cut.lastIndexOf('?');
-      // Priorité 2: dernière virgule après 40 chars (mieux que couper un mot)
-      const comma = cut.lastIndexOf(',');
-      // Choisir le meilleur break
-      let bestBreak = -1;
-      if (qMark > 40) bestBreak = qMark;
-      else if (comma > 40) bestBreak = comma;
-      if (bestBreak > 40) {
-        r = r.substring(0, bestBreak + (r[bestBreak] === '?' ? 1 : 0)).trim();
-      } else {
-        // Aucun break propre → couper au dernier espace
-        const lastSpace = cut.lastIndexOf(' ');
-        r = lastSpace > 40 ? r.substring(0, lastSpace).trim() : cut.trim();
+      // V75: troncature intelligente — limite augmentée à 200 chars pour permettre des réponses complètes
+      if (r.length > 200) {
+        const cut = r.substring(0, 200);
+        // Priorité 1: dernier point ou ? (fin de phrase = break naturel)
+        const lastDot = cut.lastIndexOf('.');
+        const qMark = cut.lastIndexOf('?');
+        const bestSentenceBreak = Math.max(lastDot, qMark);
+        if (bestSentenceBreak > 40) {
+          r = r.substring(0, bestSentenceBreak + 1).trim();
+        } else {
+          // Aucune fin de phrase → dernier espace
+          const lastSpace = cut.lastIndexOf(' ');
+          r = lastSpace > 40 ? r.substring(0, lastSpace).trim() : cut.trim();
+        }
       }
     }
   }
@@ -933,6 +943,35 @@ function clean(text: string): string {
   r = r.replace(/[,;:\-–—]\s*$/, '').trim();
   // ANTI-POINT FINAL: un mec de 23 ans met pas de point à la fin en DM
   r = r.replace(/\.\s*$/, '').trim();
+  // V75: CORRECTEUR ORTHO ORAL — fix les fautes classiques de Mistral SANS casser le ton oral
+  // Règle: on corrige les VRAIS mots mal écrits, PAS les contractions voulues (j'capte, t'as, etc.)
+  const orthoFixes: [RegExp, string][] = [
+    [/\bTinquiète\b/g, "T'inquiète"],
+    [/\btinquiète\b/g, "t'inquiète"],
+    [/\blaffaire\b/g, "l'affaire"],
+    [/\bjai\b/g, "j'ai"],
+    [/\bJai\b/g, "J'ai"],
+    [/\bya\b/g, "y'a"],
+    [/\bYa\b/g, "Y'a"],
+    [/\bta\s+(quoi|raison|vu|fait|essayé|galéré|réussi|commencé|pensé|envoyé|regardé)/gi, "t'as $1"],
+    [/\btes\s+(bloqué|prêt|motivé|sûr|chaud|grave|content|déter)/gi, "t'es $1"],
+    [/\bcest\b/gi, "c'est"],
+    [/\bCest\b/g, "C'est"],
+    [/\bdacc\b/gi, "d'acc"],
+    [/\btas\s/gi, "t'as "],
+    [/\bjsuis\b/gi, "j'suis"],
+    [/\bjcapte\b/gi, "j'capte"],
+    [/\bjvois\b/gi, "j'vois"],
+    [/\bjsais\b/gi, "j'sais"],
+    [/\bjte\b/gi, "j'te"],
+    [/\bjme\b/gi, "j'me"],
+    [/\bpq\b/gi, "pourquoi"],
+    [/\bptdr\b/gi, "mdrr"],
+    [/\bpta?in\b/gi, "putain"],
+  ];
+  for (const [pattern, replacement] of orthoFixes) {
+    r = r.replace(pattern, replacement);
+  }
   return r;
 }
 
@@ -1016,15 +1055,15 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   }
 
   let phaseInstr = '';
-  let maxChars = 60; // V71: défaut TRÈS COURT — un DM c'est pas un mail
+  let maxChars = 100; // V75: assez pour des réponses complètes. Le system prompt gère la longueur
   switch(phase) {
     case 'ACCUEIL':
       phaseInstr = `Premier msg. ${salamDone ? '' : 'Salam, '}1 question courte`;
-      maxChars = 50;
+      maxChars = 60;
       break;
     case 'EXPLORER_OUTBOUND':
       phaseInstr = `OUTBOUND: T'as DM en premier. MIROIR ses mots + rebondis en 5 mots. SILENCE OK si il développe${profileBlock ? ' ' + profileBlock.trim() : ''}`;
-      maxChars = 70;
+      maxChars = 80;
       break;
     case 'EXPLORER':
       phaseInstr = `ÉCOUTE PURE. Reprends SES mots (miroir) + 1 question courte. Suis SON rythme. Si il parle beaucoup → "Grave" ou "Ah ouais" (silence stratégique)`;
@@ -1090,10 +1129,11 @@ Si il envoie un lien/photo/localisation → rebondis dessus naturellement, pose 
 Si il dit "et toi ça avance ?" → réponds à SA question en 5 mots puis rebondis.
 JAMAIS répondre à côté. JAMAIS reformuler sa question au lieu d'y répondre. JAMAIS "intéressant ce que tu dis".
 
-RÈGLE #2 — ULTRA COURT, 1 SEULE PHRASE:
-Max 1 phrase. 5-10 mots. Si tu peux dire en 3 mots, dis en 3. "Grave", "Ah ouais ?", "Genre comment" = OK.
-JAMAIS 2 phrases. JAMAIS de virgule qui rallonge en mode "..., et du coup..., parce que...".
-Un DM = un texto à un pote. Pas un paragraphe.
+RÈGLE #2 — COURT PAR DÉFAUT, FOURNI SI NÉCESSAIRE:
+Défaut = 1 phrase, 5-15 mots. "Grave", "Ah ouais ?", "Genre comment" = OK.
+MAIS si le prospect pose une VRAIE question (prix, programme, comment ça marche, c'est quoi) → tu peux répondre en 2-3 phrases courtes. Tu DOIS répondre de manière COMPLÈTE. Pas couper ta pensée au milieu.
+Exemple OK: "80j d'accompagnement perso. Tu bosses sur ton mindset et ton business. Mais avant ça, t'en es où toi ?"
+Un DM = un texto à un pote. Pas un paragraphe. Mais un pote qui RÉPOND quand on lui pose une question.
 
 RÈGLE #3 — ZÉRO LEÇON:
 Tu donnes PAS de valeur en DM. Pas d'insight, pas d'explication, pas de "le vrai truc c'est que", pas de psychologie, pas de métaphore. T'es là pour ÉCOUTER et ORIENTER vers les liens. La valeur = les liens UNIQUEMENT.
@@ -1174,7 +1214,8 @@ CLOSER: Gap (#3) + Réponse directe (#5). L'offre = le PONT entre son état actu
 
 STYLE DJIBRIL RÉEL (extrait de ses vrais messages):
 - Contractions: j'capte, t'as, y'a, j'sais, c'est, j'vois, j'te (40-50% des phrases)
-- Expressions: "le délire", "le game", "le truc c'est que", "en vrai", "du coup", "genre", "frérot", "en mode"
+- Expressions: "le game", "le truc c'est que", "en vrai", "du coup", "genre", "frérot", "en mode"
+- "le délire" / "ton délire" → UNIQUEMENT quand le prospect parle d'un CONCEPT/PROJET/PASSION (ex: "c'est quoi ton délire exactement"). JAMAIS quand il pose une question SÉRIEUSE sur l'argent, sa situation, ses problèmes. "Délire" sur un sujet sérieux = tu minimises ce qu'il vit
 - Rires: "mdrr" (avec 2 R), "lol" — JAMAIS "haha" ou "ahaha"
 - Approbation: "grave", "clairement", "j'capte", "ah ouais"
 - Ponctuation: virgules et ? uniquement. Zéro point final, zéro !, zéro ..., zéro émoji
@@ -1299,7 +1340,9 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   const messages = buildMessages(history, effectiveMsg, mem, mCtx);
   // V71: tokens dynamiques — plus pour les phases avec URL
   const needsUrl = ['PROPOSER_VALEUR', 'ENVOYER_VALEUR', 'ENVOYER_LANDING', 'ENVOYER_CALENDLY', 'CLOSER'].includes(phaseResult.phase);
-  const tokens = isDistress ? 80 : needsUrl ? 100 : MAX_TOKENS;
+  // V75: tokens dynamiques — plus de tokens quand le prospect pose une vraie question
+  const hasQuestion = /\?|c.?est quoi|comment|combien|pourquoi|qu.?est.?ce/i.test(msg);
+  const tokens = isDistress ? 80 : needsUrl ? 120 : hasQuestion ? 120 : MAX_TOKENS;
   console.log(`[V69] Phase=${phaseResult.phase} Trust=${phaseResult.trust} Funnel=${phaseResult.funnel.funnelStep} Qual=${phaseResult.qual} #${phaseResult.n + 1}${isStuck ? ' ⚠️STUCK' : ''}${mText ? ` 📎MEDIA=${mType}` : ''}`);
 
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -1490,17 +1533,17 @@ export default async function handler(req: Request): Promise<Response> {
     if (recentResponse && recentResponse.length > 0) {
       const lastResponseTime = new Date(recentResponse[0].created_at).getTime();
       const secsSinceLastResponse = (Date.now() - lastResponseTime) / 1000;
-      if (secsSinceLastResponse < 15) {
-        // Vérifier aussi si le dernier message user dans l'historique est le MÊME que celui qu'on traite
+      if (secsSinceLastResponse < DEBOUNCE_MS / 1000) {
+        // V75: anti-doublon aligné sur le debounce (40s)
         const { data: lastUserMsg } = await supabase.from('conversation_history')
           .select('user_message')
           .eq('user_id', userId)
           .order('created_at', { ascending: false })
           .limit(1);
         const lastMsg = lastUserMsg?.[0]?.user_message || '';
-        // Si le message est identique OU si le bot a répondu il y a <8s (doublon ManyChat), yield
-        if (secsSinceLastResponse < 8 || lastMsg === userMessage) {
-          console.log(`[V70.3c] 🛑 ANTI-DOUBLON: bot a répondu il y a ${secsSinceLastResponse.toFixed(1)}s, msg=${lastMsg === userMessage ? 'IDENTIQUE' : 'DIFF'} → YIELD`);
+        // Si le message est identique OU si le bot a répondu il y a <15s (doublon ManyChat), yield
+        if (secsSinceLastResponse < 15 || lastMsg === userMessage) {
+          console.log(`[V75] 🛑 ANTI-DOUBLON: bot a répondu il y a ${secsSinceLastResponse.toFixed(1)}s, msg=${lastMsg === userMessage ? 'IDENTIQUE' : 'DIFF'} → YIELD`);
           return mcEmpty();
         }
       }
@@ -1736,6 +1779,28 @@ export default async function handler(req: Request): Promise<Response> {
     const qual = getQualification(mem);
     if (qual === 'low_budget' || qual === 'disqualified_budget') {
       if (/https?:\/\//i.test(response)) { response = response.replace(/https?:\/\/[^\s]+/gi, '').trim(); console.log('[V65] STRIPPED all links (low/disq budget)'); }
+    }
+    // V75: ANTI-RÉPÉTITION FINALE — relit la DB JUSTE avant d'envoyer pour vérifier qu'on envoie pas un doublon
+    const { data: lastBotCheck } = await supabase.from('conversation_history')
+      .select('bot_response')
+      .eq('user_id', userId)
+      .neq('bot_response', '__PENDING__')
+      .neq('bot_response', '__ADMIN_TAKEOVER__')
+      .neq('bot_response', '__OUTBOUND__')
+      .order('created_at', { ascending: false })
+      .limit(3);
+    if (lastBotCheck && lastBotCheck.length > 0) {
+      const lastResponses = lastBotCheck.map(r => r.bot_response || '');
+      for (const lastR of lastResponses) {
+        if (lastR && calculateSimilarity(response, lastR) > 0.4) {
+          console.log(`[V75] 🛑 ANTI-RÉPÉTITION FINALE: "${response.substring(0, 40)}" trop similaire à "${lastR.substring(0, 40)}" → FALLBACK`);
+          // Générer un fallback FRAIS qui est DIFFÉRENT
+          const freshFallbacks = ["Du coup t'en es où", "Genre comment ça", "Et du coup", "Ah ouais", "Ok j'capte", "C'est-à-dire", "Mmh vas-y", "Clairement", "T'en es où du coup", "Développe"];
+          const availFresh = freshFallbacks.filter(f => !lastResponses.some(lr => calculateSimilarity(f, lr) > 0.2));
+          response = (availFresh.length ? availFresh : freshFallbacks)[Date.now() % (availFresh.length || freshFallbacks.length)];
+          break;
+        }
+      }
     }
     let sent = false;
     if (subscriberId) { sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
