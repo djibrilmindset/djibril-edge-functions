@@ -12,8 +12,8 @@ const BOT_RESPONSE_FIELD_ID = 14462726;
 const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
-// V78: CLAUDE OPUS — cerveau principal. Mistral/Pixtral = images. Whisper = audio.
-const MODEL = 'claude-opus-4-20250514';
+// V79: CLAUDE SONNET — cerveau principal (coût optimisé). Pixtral = images. Whisper = audio.
+const MODEL = 'claude-sonnet-4-20250514';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'whisper-1';
 const MAX_TOKENS = 80;
@@ -37,7 +37,7 @@ async function getAnthropicKey(): Promise<string | null> {
     if (data) { _anthropicKey = data; _keysFetchedAt = Date.now(); return _anthropicKey; }
   } catch {}
   // Fallback: clé stockée dans Supabase RPC uniquement (pas de hardcode pour éviter secret scanning)
-  console.log('[V78] ⚠️ Anthropic key not found in RPC, no fallback');
+  console.log('[V79] ⚠️ Anthropic key not found in RPC, no fallback');
   return null;
 }
 async function getMistralKey(): Promise<string | null> {
@@ -156,25 +156,25 @@ function isWhisperHallucination(text: string, blobSize: number): boolean {
   if (!text || text.trim().length === 0) return true;
   // V78: Audio trop petit = probablement silence ou bruit (< 5KB ≈ < 1 seconde)
   if (blobSize < 5000) {
-    console.log(`[V78] 🛑 Audio trop court (${blobSize} bytes < 5KB) → hallucination probable`);
+    console.log(`[V79] 🛑 Audio trop court (${blobSize} bytes < 5KB) → hallucination probable`);
     return true;
   }
   // V78: Transcription trop courte (1-2 mots) sur un petit fichier = suspect
   const wordCount = text.trim().split(/\s+/).length;
   if (wordCount <= 2 && blobSize < 15000) {
-    console.log(`[V78] 🛑 Transcription trop courte (${wordCount} mots, ${blobSize} bytes) → hallucination probable`);
+    console.log(`[V79] 🛑 Transcription trop courte (${wordCount} mots, ${blobSize} bytes) → hallucination probable`);
     return true;
   }
   // V78: Patterns connus d'hallucination Whisper
   for (const pat of WHISPER_HALLUCINATION_PATTERNS) {
     if (pat.test(text)) {
-      console.log(`[V78] 🛑 Whisper hallucination pattern détecté: "${text.substring(0, 60)}" matches ${pat}`);
+      console.log(`[V79] 🛑 Whisper hallucination pattern détecté: "${text.substring(0, 60)}" matches ${pat}`);
       return true;
     }
   }
   // V78: Texte qui ne ressemble PAS à du français oral (trop "propre", trop long sans contractions)
   if (text.length > 50 && !/[',]/.test(text) && /^[A-Z]/.test(text)) {
-    console.log(`[V78] ⚠️ Transcription suspecte (trop formelle): "${text.substring(0, 60)}"`);
+    console.log(`[V79] ⚠️ Transcription suspecte (trop formelle): "${text.substring(0, 60)}"`);
     // Pas un rejet ici, juste un warning — le contenu peut quand même être valide
   }
   return false;
@@ -193,10 +193,10 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
     const audioBlob = await audioResponse.blob();
     // V78: Vérifier la taille AVANT d'envoyer à Whisper
     const blobSize = audioBlob.size;
-    console.log(`[V78] Audio blob size: ${blobSize} bytes`);
+    console.log(`[V79] Audio blob size: ${blobSize} bytes`);
     if (blobSize < 2000) {
       // < 2KB = pas d'audio réel (0:00 secondes par exemple)
-      console.log(`[V78] 🛑 Audio trop petit (${blobSize} bytes) → skip Whisper`);
+      console.log(`[V79] 🛑 Audio trop petit (${blobSize} bytes) → skip Whisper`);
       return null;
     }
     // Envoyer à Whisper — V70.1: prompt hints FR oral/banlieue pour meilleure reconnaissance
@@ -213,10 +213,10 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
     });
     if (!whisperResponse.ok) { console.log(`[V69] Whisper error: ${whisperResponse.status}`); return null; }
     const transcription = (await whisperResponse.text()).trim();
-    console.log(`[V78] 🎤 Whisper transcription: "${transcription.substring(0, 100)}" (${blobSize} bytes)`);
+    console.log(`[V79] 🎤 Whisper transcription: "${transcription.substring(0, 100)}" (${blobSize} bytes)`);
     // V78: Vérifier si c'est une hallucination
     if (isWhisperHallucination(transcription, blobSize)) {
-      console.log(`[V78] 🛑 HALLUCINATION DÉTECTÉE → transcription ignorée`);
+      console.log(`[V79] 🛑 HALLUCINATION DÉTECTÉE → transcription ignorée`);
       return null;
     }
     return transcription || null;
@@ -584,8 +584,16 @@ function calculateSimilarity(text1: string, text2: string): number {
   return Math.max(kwScore, bgScore) + startPenalty;
 }
 function isTooSimilar(response: string, recentBotResponses: string[]): boolean {
+  const respLower = response.toLowerCase().trim();
   const responseStart = getStartSignature(response);
   const responseFirstWord = getFirstWord(response);
+  // V79: EXACT MATCH CHECK — priorité absolue, même pour les réponses courtes
+  for (const recent of recentBotResponses) {
+    if (recent.toLowerCase().trim() === respLower) {
+      console.log(`[V79] 🚫 EXACT MATCH bloqué: "${response.substring(0, 50)}"`);
+      return true;
+    }
+  }
   // V70.2: Compter combien de msgs récents commencent par le MÊME premier mot
   let sameFirstWordCount = 0;
   for (const recent of recentBotResponses) {
@@ -1420,8 +1428,13 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   // Si spirale détectée, injecter un RESET dans le prompt
   const recentResponses = history.map((h: any) => h.bot_response || '').filter(Boolean);
   const isStuck = recentResponses.length >= 3 && recentResponses.slice(-3).some((r, i, arr) => i > 0 && calculateSimilarity(r, arr[0]) > 0.3);
+  // V79: TOUJOURS injecter les dernières réponses pour INTERDIRE la répétition
+  const last5 = recentResponses.slice(-5).filter(r => r.length > 3);
+  if (last5.length > 0) {
+    sys += `\n\n🚫 RÉPONSES INTERDITES — tu as DÉJÀ dit ces phrases, NE LES RÉPÈTE PAS et ne dis rien de similaire:\n${last5.map((r, i) => `${i+1}. "${r}"`).join('\n')}\nChaque nouvelle réponse DOIT être formulée DIFFÉREMMENT. Mots différents, structure différente, angle différent.`;
+  }
   if (isStuck) {
-    sys += '\n\n🚨 ALERTE SPIRALE CRITIQUE: Tes dernières réponses se RÉPÈTENT. Le prospect voit que c\'est un robot. Tu DOIS: 1) Utiliser des MOTS COMPLÈTEMENT DIFFÉRENTS 2) Commencer ta phrase AUTREMENT (pas le même premier mot) 3) Changer de SUJET ou d\'ANGLE — si t\'as posé des questions, cette fois DONNE une info concrète. Si t\'as parlé de blocage, parle d\'ACTION. Si t\'as validé, cette fois CHALLENGE. RIEN ne doit ressembler aux messages précédents. CASSE LA BOUCLE MAINTENANT.';
+    sys += '\n\n🚨 ALERTE SPIRALE CRITIQUE: Tes dernières réponses se RÉPÈTENT. Le prospect voit que c\'est un robot. CASSE LA BOUCLE: change de sujet, donne une info concrète au lieu de poser une question, ou challenge le prospect.';
   }
   // AUTO-DÉTECTION HALLUCINATION: scanner les réponses récentes pour trouver des infos inventées
   const hallCheck = detectHallucination(history, mem);
@@ -1462,7 +1475,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
         const raw = result.content[0].text;
         // V78: ANTI-SELF-TALK — Claude le fait rarement mais on garde la sécurité
         if (isSelfTalk(raw)) {
-          console.log(`[V78] 🚨 SELF-TALK DÉTECTÉ attempt ${attempt + 1}: "${raw.substring(0, 80)}"`);
+          console.log(`[V79] 🚨 SELF-TALK DÉTECTÉ attempt ${attempt + 1}: "${raw.substring(0, 80)}"`);
           retryHint = `\n\n🚨 ERREUR CRITIQUE: Ta réponse était du RAISONNEMENT INTERNE. Tu es Djibril qui parle en DM. Réponds DIRECTEMENT au prospect comme un pote. JAMAIS de méta-commentary.`;
           continue;
         }
@@ -1488,10 +1501,21 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
       console.error('[V65] API error:', JSON.stringify(result).substring(0, 200));
     } catch (e: any) { console.error('[V65] error:', e.message); }
   }
-  const fallbacks = ["Développe", "Genre comment ça", "Et du coup ?", "Ah ouais ?", "Ok j'capte", "C'est-à-dire ?", "Mmh vas-y", "Clairement", "T'en es où du coup"];
-  // Choisir un fallback différent de ceux déjà envoyés
-  const usedFallbacks = recentResponses.map(r => r.toLowerCase());
-  const available = fallbacks.filter(f => !usedFallbacks.some(u => calculateSimilarity(f, u) > 0.2));
+  // V79: Fallbacks plus variés + JAMAIS répéter un fallback déjà utilisé
+  const fallbacks = [
+    "Développe frérot", "Genre comment ça exactement ?", "Et du coup t'en es où ?",
+    "Ah ouais raconte", "C'est-à-dire ?", "Vas-y dis-moi tout",
+    "T'en es où concrètement ?", "Ok et après ?", "Qu'est-ce qui te bloque le plus ?",
+    "Ça fait combien de temps ?", "Et t'as fait quoi pour changer ça ?", "Genre quoi par exemple ?"
+  ];
+  const usedLower = recentResponses.map(r => r.toLowerCase().trim());
+  const available = fallbacks.filter(f => {
+    const fl = f.toLowerCase().trim();
+    // EXACT MATCH interdit
+    if (usedLower.includes(fl)) return false;
+    // Similarité > 0.3 interdit
+    return !usedLower.some(u => calculateSimilarity(fl, u) > 0.3);
+  });
   return (available.length ? available : fallbacks)[Date.now() % (available.length || fallbacks.length)];
 }
 
@@ -1533,7 +1557,7 @@ export default async function handler(req: Request): Promise<Response> {
       if (!mediaProcessedText) {
         // V78: Vocal reçu mais transcription échouée (hallucination/trop court/silence)
         mediaContext = `[VOCAL REÇU mais audio trop court ou inaudible. Le prospect a envoyé un vocal mais on a pas pu le comprendre. RÉPONDS NATURELLEMENT: rebondis sur ce qu'il avait dit AVANT ce vocal. Si y'avait rien avant, dis juste "j'ai pas capté ton vocal frérot, tape-moi ça" ou "ça a coupé, redis-moi ça en texto". JAMAIS dire "je peux pas écouter les vocaux".]`;
-        console.log(`[V78] ⚠️ Vocal reçu sans transcription → contexte défensif`);
+        console.log(`[V79] ⚠️ Vocal reçu sans transcription → contexte défensif`);
       }
       if (mediaProcessedText) {
         // V73: Analyse enrichie du vocal — émotions, ton, intention
@@ -1867,7 +1891,7 @@ export default async function handler(req: Request): Promise<Response> {
     if (!response) {
       const mInfo2 = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
       response = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile, isOutbound, mInfo2);
-      console.log(`[V78] CLAUDE ${response.length}c`);
+      console.log(`[V79] CLAUDE ${response.length}c`);
     }
     if (hasSalamBeenSaid(history) && /^salam/i.test(response)) {
       response = response.replace(/^salam[\s!?.]*(?:aleykoum)?[\s!?.]*(?:fr[eé]rot)?[\s!?.,]*/i, '').trim();
