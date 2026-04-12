@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V70.3 — OUTBOUND=DROIT AU BUT + INBOUND=INTRINSÈQUE + ADAPTE RYTHME PROSPECT ===
+// === V70.3b — OUTBOUND n<=2 puis valeur + wantsDirect strict + MAX_TOKENS 120 + troncature 200 ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -15,7 +15,7 @@ const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
 const MODEL = 'mistral-large-latest';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'whisper-1';
-const MAX_TOKENS = 100; // V70.2b: ULTRA COURT — le bot doit condenser, pas rallonger
+const MAX_TOKENS = 120; // V70.3b: court mais assez pour finir une phrase avec URL
 const DEBOUNCE_MS = 10000; // 10 seconds for message grouping (prospects fragmentent souvent sur 8-12s)
 
 let _mistralKey: string | null = null;
@@ -742,9 +742,9 @@ function getPhase(history: any[], msg: string, isDistress: boolean, mem: Prospec
   if (qual === 'low_budget') return { phase: 'DÉSENGAGER', n, trust, funnel, offerPitched, qual };
   const wantsCalendly = /\b(calendly|rdv|rendez|appel|call|réserv|book)\b/i.test(m);
   const wantsAction = /\b(audit|accompagn|programme|coaching|je veux bosser|ton offre|proposes quoi|acheter|payer|investir|je veux commencer)\b/i.test(m);
-  // V70.3: Détecte si le prospect veut aller DROIT AU BUT (inbound ou outbound)
-  const wantsDirect = /\b(c.?est quoi (ton|l.?)|montre|dis.?moi direct|concrètement|en gros|résume|viens.?en au fait|propose|solution|comment (ça|tu)|j.?veux savoir|explique)\b/i.test(m);
-  if (wantsCalendly || (wantsAction && trust >= 3) || (wantsDirect && n >= 2 && trust >= 2)) {
+  // V70.3b: Détecte si le prospect veut aller DROIT AU BUT — patterns SPÉCIFIQUES seulement
+  const wantsDirect = /\b(c.?est quoi ton (offre|truc|programme|accompagnement)|dis.?moi direct|concrètement.{0,10}(quoi|offre)|viens.?en au fait|résume.{0,5}(moi|ton)|j.?veux savoir ce que|montre.?moi|propose.?moi|c.?est combien|ça coûte)\b/i.test(m);
+  if (wantsCalendly || (wantsAction && trust >= 3) || (wantsDirect && n >= 3 && trust >= 3)) {
     if (funnel.funnelStep === 'NEED_VALEUR') return { phase: 'ENVOYER_VALEUR', n, trust, funnel, offerPitched, qual };
     if (funnel.funnelStep === 'NEED_LANDING') return { phase: 'ENVOYER_LANDING', n, trust, funnel, offerPitched, qual };
     return { phase: 'ENVOYER_CALENDLY', n, trust, funnel, offerPitched, qual };
@@ -755,21 +755,20 @@ function getPhase(history: any[], msg: string, isDistress: boolean, mem: Prospec
     return { phase: 'ATTENTE_RETOUR', n, trust, funnel, offerPitched, qual };
   }
   if (offerPitched && funnel.funnelStep === 'NEED_CALENDLY') return { phase: 'CLOSER', n, trust, funnel, offerPitched, qual };
-  // V70.3: OUTBOUND = DROIT AU BUT — le prospect n'a pas demandé à parler, il veut la solution direct
-  // n<=1: accueil outbound (1 question max), n>=2: proposer valeur IMMÉDIATEMENT
+  // V70.3b: OUTBOUND = DROIT AU BUT mais pas vendeur à la sauvette
+  // n<=2: explorer outbound (2 échanges pour écouter un minimum), n>=3: proposer valeur
   if (isOutbound) {
-    if (n <= 1) {
-      console.log(`[V70.3] 📤 OUTBOUND MODE — EXPLORER_OUTBOUND (n=${n})`);
+    if (n <= 2) {
+      console.log(`[V70.3b] 📤 OUTBOUND MODE — EXPLORER_OUTBOUND (n=${n})`);
       return { phase: 'EXPLORER_OUTBOUND', n, trust: Math.max(trust, 2), funnel, offerPitched, qual };
     }
-    // n>=2: accélérer vers PROPOSER_VALEUR si pas encore envoyé
+    // n>=3: accélérer vers PROPOSER_VALEUR si pas encore envoyé
     if (funnel.funnelStep === 'NEED_VALEUR') {
-      console.log(`[V70.3] 📤 OUTBOUND → PROPOSER_VALEUR direct (n=${n})`);
+      console.log(`[V70.3b] 📤 OUTBOUND → PROPOSER_VALEUR (n=${n})`);
       return { phase: 'PROPOSER_VALEUR', n, trust: Math.max(trust, 3), funnel, offerPitched, qual };
     }
-    // Sinon continuer le flow normal mais avec trust boosté
-    console.log(`[V70.3] 📤 OUTBOUND → flow normal accéléré (n=${n})`);
-  } else if (false) { // placeholder pour garder la structure
+    // Sinon continuer le flow normal avec trust boosté
+    console.log(`[V70.3b] 📤 OUTBOUND → flow normal accéléré (n=${n})`);
   }
   if (n === 0) return { phase: 'ACCUEIL', n, trust, funnel, offerPitched, qual };
   if (n <= 1) return { phase: 'EXPLORER', n, trust, funnel, offerPitched, qual };
@@ -853,8 +852,8 @@ function clean(text: string): string {
   r = r.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '');
   // Nettoyage espaces multiples après strips
   r = r.replace(/\s{2,}/g, ' ').trim();
-  // TRONCATURE INTELLIGENTE: protéger les URLs — seuil 160 chars (V70.2b: ULTRA COURT)
-  if (r.length > 160) {
+  // TRONCATURE INTELLIGENTE: protéger les URLs — seuil 200 (assez court + protège les URLs)
+  if (r.length > 200) {
     // Extraire les URLs présentes dans le texte
     const urlMatch = r.match(/https?:\/\/[^\s)}\]]+/g);
     if (urlMatch && urlMatch.length > 0) {
@@ -875,7 +874,7 @@ function clean(text: string): string {
       }
     } else {
       // Pas d'URL → troncature intelligente: couper sur une FIN DE PHRASE, jamais en plein milieu
-      const cut = r.substring(0, 160);
+      const cut = r.substring(0, 200);
       // Chercher le dernier séparateur de phrase (? ou ! UNIQUEMENT — pas virgule, ça fait coupé)
       const bp = Math.max(cut.lastIndexOf('?'), cut.lastIndexOf('!'));
       const bestBreak = bp > 40 ? bp : -1;
