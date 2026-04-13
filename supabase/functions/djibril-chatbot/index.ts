@@ -1925,9 +1925,9 @@ export default async function handler(req: Request): Promise<Response> {
     if (recentByRespondedAt && recentByRespondedAt.length > 0) {
       const realResponseTime = new Date(recentByRespondedAt[0].responded_at).getTime();
       const secsSinceRealResponse = (Date.now() - realResponseTime) / 1000;
-      // V180: Si le bot a VRAIMENT répondu il y a moins de 10s → YIELD (debounce 5s + marge)
-      if (secsSinceRealResponse < 10) {
-        console.log(`[V107] 🛑 ANTI-DOUBLON (responded_at): bot a répondu il y a ${secsSinceRealResponse.toFixed(1)}s réels → YIELD`);
+      // V181: 10s → 6s (fix 33% delivery rate) — SEND DEDUP 10s post-génération gère les doublons résiduels
+      if (secsSinceRealResponse < 6) {
+        console.log(`[V181] 🛑 ANTI-DOUBLON (responded_at): bot a répondu il y a ${secsSinceRealResponse.toFixed(1)}s réels → YIELD`);
         return mcEmpty();
       }
     }
@@ -1987,9 +1987,9 @@ export default async function handler(req: Request): Promise<Response> {
     if (postDebounceRespondedAt && postDebounceRespondedAt.length > 0) {
       const realTime = new Date(postDebounceRespondedAt[0].responded_at).getTime();
       const secsSinceReal = (Date.now() - realTime) / 1000;
-      // V180: Si un process a répondu il y a < 20s (debounce 5s + génération 10s + marge) → YIELD
-      if (secsSinceReal < 20) {
-        console.log(`[V107] 🛑 POST-DEBOUNCE (responded_at): autre process a répondu il y a ${secsSinceReal.toFixed(1)}s réels → YIELD`);
+      // V181: 20s → 8s (fix 33% delivery) — debounce 5s + génération ~10s gère majorité, SEND DEDUP 10s fin
+      if (secsSinceReal < 8) {
+        console.log(`[V181] 🛑 POST-DEBOUNCE (responded_at): autre process a répondu il y a ${secsSinceReal.toFixed(1)}s réels → YIELD`);
         return mcEmpty();
       }
     }
@@ -2005,8 +2005,8 @@ export default async function handler(req: Request): Promise<Response> {
     if (postDebounceCheck && postDebounceCheck.length > 0) {
       const postDebounceTime = new Date(postDebounceCheck[0].created_at).getTime();
       const secsSincePostDebounce = (Date.now() - postDebounceTime) / 1000;
-      if (secsSincePostDebounce < 20) { // V180: 20s (was 60s)
-        console.log(`[V107] 🛑 POST-DEBOUNCE (created_at fallback): ${secsSincePostDebounce.toFixed(1)}s → YIELD`);
+      if (secsSincePostDebounce < 8) { // V181: 20s → 8s (fix 33% delivery rate)
+        console.log(`[V181] 🛑 POST-DEBOUNCE (created_at fallback): ${secsSincePostDebounce.toFixed(1)}s → YIELD`);
         return mcEmpty();
       }
     }
