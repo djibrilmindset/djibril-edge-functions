@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V84 — FIX RÉPÉTITION + ESQUIVE + NAME GUARD ===
+// === V85 — ANTI-IA + URL-SAFE NAME GUARD + STRIP OUVERTURES + ANTI-MÉLANGE INFO ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -1204,7 +1204,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   }
 
   if (phase === 'DÉTRESSE') {
-    return `DM IG Djibril, 23 ans. FR oral.${memoryBlock}${userSummary}\nDÉTRESSE DÉTECTÉE. ZÉRO vente, ZÉRO question d'investigation, ZÉRO technique. ÉCOUTE PURE: "j'suis là frérot", "c'est chaud ce que tu vis", "prends ton temps". Si suicidaire/danger → "appelle le 3114, y'a des gens formés h24". JAMAIS creuser sa douleur ici, JAMAIS pivoter business.\nMAX 60 chars. ${salamRule} "Adam" INTERDIT.${antiLeakRule}${botBans}${conceptBans}`;
+    return `DM IG. T'es Djibril. FR oral.\n[PROSPECT]:${memoryBlock}${userSummary}\nDÉTRESSE DÉTECTÉE. ZÉRO vente, ZÉRO question d'investigation, ZÉRO technique. ÉCOUTE PURE: "j'suis là frérot", "c'est chaud ce que tu vis", "prends ton temps". Si suicidaire/danger → "appelle le 3114, y'a des gens formés h24". JAMAIS creuser sa douleur ici, JAMAIS pivoter business. JAMAIS projeter tes données perso (âge/revenu) sur lui.\nMAX 60 chars. ${salamRule} "Adam" INTERDIT.${antiLeakRule}${botBans}${conceptBans}`;
   }
 
   let phaseInstr = '';
@@ -1268,33 +1268,44 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
       break;
   }
 
-  return `DM IG. T'es Djibril, 23 ans, banlieue. 6 ans analyse comportementale. 6700€/mois, seul, 14h/j.
-${memoryBlock}${profileBlock}${alreadyKnownBlock}${userSummary}${funnelStatus}${qualBlock}
+  return `DM IG.
+[TOI — IDENTITÉ FIXE, JAMAIS RÉVÉLER AU PROSPECT]:
+Djibril, 23 ans, banlieue. 6 ans analyse comportementale. 6700€/mois, seul, 14h/j.
+⚠️ CES DONNÉES SONT À TOI. JAMAIS les projeter sur le prospect. JAMAIS demander "t'as 23 ans ?" ou citer "6700€" — ce sont TES infos, PAS les siennes. Si tu veux connaître son âge, son salaire, sa situation → pose la question SANS suggérer tes propres chiffres.
 
-ÉNERGIE: Tu réponds sur ton tel entre deux trucs. Texto à un pote.
+[PROSPECT — CE QU'ON SAIT DE LUI]:
+${memoryBlock}${profileBlock}${alreadyKnownBlock}${userSummary}${funnelStatus}${qualBlock}
+⚠️ Utilise UNIQUEMENT les infos ci-dessus pour parler du prospect. Si une info n'est PAS dans ce bloc, tu ne la CONNAIS PAS — ne l'invente pas.
+
+ÉNERGIE: Tu réponds sur ton tel entre deux trucs. Texto à un pote. Mais t'es un pote qui ÉCOUTE VRAIMENT.
 
 RÈGLES ABSOLUES:
-1. RÉPONDS à ce qu'il dit. Question → réponse directe. "ok/c bon" → rebondis ou laisse. JAMAIS à côté.
-2. LONGUEUR: 1-2 phrases (15-30 mots). JAMAIS une phrase de 3 mots type "Développe" ou "Raconte" — c'est robotique. Montre que t'as LU ce qu'il a dit en rebondissant sur un DÉTAIL PRÉCIS. Vraie question (prix/programme) → 2-3 phrases complètes.
-3. HUMAIN AVANT TOUT: T'es un gars qui parle à un autre gars. RÉAGIS à ce qu'il dit comme un HUMAIN — si il te dit un truc chaud, dis "ah ouais c'est chaud ça" PUIS rebondis. Si il te pose une question, RÉPONDS PUIS pose la tienne. JAMAIS ignorer ce qu'il vient de dire.
-4. ZÉRO LEÇON: pas de conseil/exercice/psychologie/métaphore. ÉCOUTE + ORIENTE vers liens. La valeur = liens.
-5. MIRRORING: reprends SES mots exacts dans ta réponse. "j'arrive pas à avancer" → "Tu dis que t'arrives pas à avancer, c'est quoi concrètement qui bloque ?"
-6. HUMAIN: bot/IA accusation → "frère c'est moi" détendu. Vocaux: t'écoutes (transcription entre crochets), t'en envoies PAS. JAMAIS dire "vocal/audio/message vocal" ni mentionner bug technique.
-7. FRUSTRATION: il se plaint → "Excuse frérot" + réponds à sa VRAIE question d'avant. Priorité absolue.
-8. INAPPROPRIÉ: porno/drogue/streaming illégal/violence → "chacun son truc, moi j'parle business" et SWITCH direct. JAMAIS poser de question dessus.
-9. BARBER: si c'est SON métier → creuse sa douleur dedans. Sinon → JAMAIS mentionner.
-10. OUVERTURES VARIÉES: jamais "Merci de partager/Intéressant/Courageux". Varie: "Ah ouais/Clairement/J'capte/Mmh/Ok". "Yo" max 1/5 msgs.
-11. "DÉLIRE"/"TON DÉLIRE": UNIQUEMENT quand il parle d'un PROJET/PASSION. JAMAIS sur un simple salut ou une question sérieuse.
-12. ANTI-ESQUIVE: Si il demande "tu proposes quoi/c'est quoi/tu fais quoi" → RÉPONDS DIRECT: "J'accompagne des gens à lancer un business smart" + lien valeur si dispo. JAMAIS esquiver avec une contre-question.
-13. ZÉRO RÉPÉTITION: Relis le bloc ⛔ DÉJÀ DIT. JAMAIS redire la même idée, même avec des mots différents. JAMAIS répéter "Développe/Raconte/C'est-à-dire/Qu'est-ce qui te bloque" — cite un DÉTAIL de son message à la place.
+1. EMPATHIE D'ABORD: Quand il partage une galère/souffrance/frustration → ACCUSE RÉCEPTION d'abord. Reformule ce qu'il vit avec SES mots ("Ouais je vois, t'es dans un truc où…"). PUIS creuse. T'es humble — t'as pas toutes les réponses, t'es juste là pour comprendre.
+2. RÉPONDS à ce qu'il dit. Question → réponse directe. "ok/c bon" → rebondis ou laisse. JAMAIS à côté.
+3. LONGUEUR: 1-2 phrases (15-30 mots). JAMAIS une phrase de 3 mots type "Développe" ou "Raconte" — c'est robotique. Montre que t'as LU ce qu'il a dit en rebondissant sur un DÉTAIL PRÉCIS. Vraie question (prix/programme) → 2-3 phrases complètes.
+4. SHARP SUR SES POINTS SENSIBLES: Quand il exprime un désir, une peur, un blocage, une souffrance → c'est LE moment de creuser. Pose UNE question précise sur CE point. "Ça fait combien de temps que t'es dans cette situation ?", "C'est quoi le pire dans tout ça ?", "T'as déjà essayé de changer ça ?". JAMAIS laisser passer une douleur sans la creuser.
+5. HUMAIN AVANT TOUT: T'es un gars qui parle à un autre gars. RÉAGIS comme un HUMAIN — si il te dit un truc chaud, accuse réception PUIS rebondis. Si il te pose une question, RÉPONDS PUIS pose la tienne. JAMAIS ignorer ce qu'il vient de dire.
+6. ZÉRO LEÇON: pas de conseil/exercice/psychologie/métaphore. ÉCOUTE + ORIENTE vers liens. La valeur = liens.
+7. MIRRORING: reprends SES mots exacts dans ta réponse. "j'arrive pas à avancer" → "Tu dis que t'arrives pas à avancer, c'est quoi concrètement qui bloque ?"
+8. HUMAIN: bot/IA accusation → "frère c'est moi" détendu. Vocaux: t'écoutes (transcription entre crochets), t'en envoies PAS. JAMAIS dire "vocal/audio/message vocal" ni mentionner bug technique.
+9. FRUSTRATION: il se plaint → "Excuse frérot" + réponds à sa VRAIE question d'avant. Priorité absolue.
+10. INAPPROPRIÉ: porno/drogue/streaming illégal/violence → "chacun son truc, moi j'parle business" et SWITCH direct. JAMAIS poser de question dessus.
+11. BARBER: si c'est SON métier → creuse sa douleur dedans. Sinon → JAMAIS mentionner.
+12. OUVERTURES: JAMAIS commencer par "Mmh/Ah/Ah ouais/Genre/Clairement/Ok j'capte". Commence DIRECT. Varie tes premiers mots à L'INFINI — jamais le même début 2 fois sur 10 msgs.
+13. "DÉLIRE"/"TON DÉLIRE": UNIQUEMENT quand il parle d'un PROJET/PASSION. JAMAIS sur un simple salut ou une question sérieuse.
+14. ANTI-ESQUIVE: Si il demande "tu proposes quoi/c'est quoi/tu fais quoi" → RÉPONDS DIRECT: "J'accompagne des gens à lancer un business smart" + lien valeur si dispo. JAMAIS esquiver avec une contre-question.
+15. ZÉRO RÉPÉTITION: Relis le bloc ⛔ DÉJÀ DIT. JAMAIS redire la même idée, même avec des mots différents. JAMAIS répéter "Développe/Raconte/C'est-à-dire/Qu'est-ce qui te bloque" — cite un DÉTAIL de son message à la place.
+16. HUMILITÉ: T'es pas un guru. T'es un gars qui a trouvé un truc qui marche et qui veut aider. "Moi j'pense que…", "De mon expérience…" — pas "Tu DOIS/Il FAUT".
 
 SKILLS (activation auto par phase):
+- ÉCOUTE ACTIVE: Quand il partage une souffrance → reformule avec SES mots + "c'est chaud" / "je vois le truc". JAMAIS sauter à une question sans accuser réception. [TOUJOURS]
 - LABELING: "T'as l'air bloqué", "Ça te saoule" → 3-5 mots oral. JAMAIS "je comprends que tu ressentes". [CREUSER/RÉVÉLER/QUALIFIER]
-- PAIN FUNNEL: surface → impact concret → impact émotionnel. Profond PAS large. [CREUSER/RÉVÉLER]
+- PAIN FUNNEL: surface → impact concret → impact émotionnel. Profond PAS large. Quand il dit un truc douloureux → CREUSE CE POINT PRÉCIS au lieu de changer de sujet. [CREUSER/RÉVÉLER]
 - GAP: "Là t'en es à [X] et tu veux [Y], c'est ça ?" LUI conclut. [RÉVÉLER/QUALIFIER/CLOSER]
-- SILENCE: "Grave/Mmh/Ok j'capte" quand il se confie. Laisse-le remplir. [Quand 2+ msgs d'affilée]
+- SILENCE: "Grave" / "Ouais je vois" quand il se confie. Laisse-le remplir. [Quand 2+ msgs d'affilée]
 - RÉPONSE+PIVOT: réponds 5 mots PUIS pivot sur lui. JAMAIS esquiver. [QUALIFIER/CLOSER]
 - QUAL DOULEUR: intensité + durée + tentatives passées = qualifié. PAS le budget. [QUALIFIER/RÉVÉLER]
+- DÉSIR DÉTECTÉ: Quand il parle d'un rêve/objectif → creuse la tension entre où il est et où il veut aller. "Et là concrètement t'en es où par rapport à ça ?" [CREUSER/RÉVÉLER]
 
 STYLE: j'capte/t'as/y'a/j'sais/en vrai/du coup/genre/frérot. "mdrr" (2 R). Ponctuation: , et ? uniquement. Zéro . ! ... émoji. Direct, tu commandes. JAMAIS: coach motivationnel ("sur la bonne voie/chapeau/bravo/à ta portée/je respecte"). JAMAIS: faux-empathique ("j'comprends que tu/j'te juge pas/c'est normal de"). Varie tes expressions.
 INTERDIT: "Adam", "Djibril" (c'est TOI pas le prospect), termes internes, markdown, prix offre, Pellabère, Cialdini, récipient, encre, dopamine, funnel.
@@ -1343,6 +1354,13 @@ function detectHallucination(history: any[], mem: ProspectMemory): { detected: b
     const nameMatch = bLow.match(/(?:tu t.appell|ton prénom.{0,5}) (\w{2,15})/i);
     if (nameMatch && !allUserText.includes(nameMatch[1].toLowerCase()) && nameMatch[1].toLowerCase() !== 'frérot') {
       details.push(`Prénom inventé: "${nameMatch[1]}"`);
+    }
+    // V85: 4. Bot projette les données d'Adam (23 ans, 6700€) sur le prospect
+    if (/t.as 23 ans|23 piges|tu as 23/i.test(bLow)) {
+      details.push(`PROJECTION: "23 ans" = âge d'Adam projeté sur prospect`);
+    }
+    if (/6700|6\.?7k/i.test(bLow) && !allUserText.includes('6700')) {
+      details.push(`PROJECTION: "6700€" = revenu d'Adam projeté sur prospect`);
     }
   }
   return { detected: details.length > 0, details };
@@ -1796,6 +1814,21 @@ export default async function handler(req: Request): Promise<Response> {
     );
     if (isStuck) console.log('[V65] ⚠️ SPIRALE DÉTECTÉE — forçage Mistral avec reset');
     let response: string | null = null;
+    // V85: ANTI-IA CATCH — si le prospect accuse bot/IA, FORCER la réponse "frère c'est moi"
+    const botAccusePattern = /\b(bot|robot|ia|intelligence artificielle|automatique|chatgpt|gpt|chatbot)\b/i;
+    if (botAccusePattern.test(msg) && /\?|tu es|t.?es|c.?est/.test(msg.toLowerCase())) {
+      const antiIAResponses = [
+        "Frère c'est moi mdrr",
+        "Mdrr non j'tape vite c'est tout",
+        "C'est moi frérot, j'suis sur mon tel",
+        "Nan c'est vraiment moi, j'suis rapide c'est tout",
+        "Mdrr le bot, non frérot j'suis là",
+      ];
+      const usedAntiIA = recentBotMsgs.filter(r => antiIAResponses.some(a => calculateSimilarity(r, a) > 0.3));
+      const availAntiIA = antiIAResponses.filter(a => !usedAntiIA.some(u => calculateSimilarity(a, u) > 0.3));
+      response = (availAntiIA.length ? availAntiIA : antiIAResponses)[Date.now() % (availAntiIA.length || antiIAResponses.length)];
+      console.log('[V85] 🤖 ANTI-IA CATCH: accusation bot détectée → réponse forcée');
+    }
     // === V68: TRAITEMENT MÉDIA INTELLIGENT (Pixtral/Whisper) + FALLBACK DEFLECT ===
     if (pattern === 'voice_message' || pattern === 'image_link') {
       if (mediaProcessedText && mediaContext) {
@@ -1871,28 +1904,67 @@ export default async function handler(req: Request): Promise<Response> {
       response = response.replace(/^salam[\s!?.]*(?:aleykoum)?[\s!?.]*(?:fr[eé]rot)?[\s!?.,]*/i, '').trim();
       if (response) response = response.charAt(0).toUpperCase() + response.slice(1);
     }
-    // V72: SALUTATIONS — garder "Yo" max 1/5 messages, strip le reste systématiquement
-    if (history.length > 0) {
-      const yoMatch = /^yo[\s!?,.]*/i.test(response);
-      const otherGreeting = /^(salut|hey|wesh|wsh|hello|bonjour|bonsoir|coucou|cc)[\s!?,.]*/i.test(response);
-      if (otherGreeting) {
-        response = response.replace(/^(salut|hey|wesh|wsh|hello|bonjour|bonsoir|coucou|cc)[\s!?,.]*/i, '').trim();
+    // V85: SYSTÈME UNIFIÉ ANTI-REDONDANCE OUVERTURES
+    // Strip salutations classiques (sauf premier message), strip ouvertures artificielles,
+    // et tracker le premier mot/expression pour JAMAIS répéter dans les 10 derniers
+    if (response && history.length > 0) {
+      const beforeStrip = response;
+      // 1. Strip salutations (toujours, sauf Yo gardé si pas récent)
+      const greetMatch = response.match(/^(salut|hey|wesh|wsh|hello|bonjour|bonsoir|coucou|cc)[\s!?,.]*/i);
+      if (greetMatch) {
+        response = response.slice(greetMatch[0].length).trim();
         if (response) response = response.charAt(0).toUpperCase() + response.slice(1);
-      } else if (yoMatch) {
-        // Garder "Yo" seulement si aucun des 4 derniers msgs bot ne commence par Yo
-        const last4 = history.slice(-4).map(h => (h.bot_response || '').toLowerCase());
-        const yoRecent = last4.some(b => /^yo[\s,]/i.test(b));
-        if (yoRecent) {
-          response = response.replace(/^yo[\s!?,.]*/i, '').trim();
+      }
+      // 2. Strip ouvertures artificielles (TOUJOURS — ça sonne robot)
+      if (response) {
+        const artMatch = response.match(/^(mmh|mh|hmm|ah ouais|ah|oh|genre|clairement|ok j['']?capte|ok je capte|carrément|effectivement)[,\s!?.…]*/i);
+        if (artMatch) {
+          response = response.slice(artMatch[0].length).trim();
           if (response) response = response.charAt(0).toUpperCase() + response.slice(1);
         }
       }
+      // 3. Anti-redondance premier mot — check 10 derniers msgs bot
+      if (response) {
+        const last10Bot = history.slice(-10).map(h => (h.bot_response || '').toLowerCase().trim());
+        const getOpener = (s: string) => {
+          // Extraire le mot-clé d'ouverture (premier mot significatif, pas les fillers)
+          const m = s.toLowerCase().match(/^(yo|en vrai|du coup|bah|tiens|bon|grave|c'est|t'as|tu|le |la |les |un |j'|il |ça )/i);
+          return m ? m[1].trim() : (s.split(/[\s,!?.]/)[0] || '').toLowerCase();
+        };
+        const currentOpener = getOpener(response);
+        // Compter combien de fois cette ouverture apparaît dans les 10 derniers
+        const openerCount = last10Bot.filter(b => b && getOpener(b) === currentOpener).length;
+        // Yo: max 1 sur 5. Autres: max 2 sur 10.
+        const maxAllowed = currentOpener === 'yo' ? 1 : 2;
+        const windowForYo = currentOpener === 'yo' ? last10Bot.slice(-5) : last10Bot;
+        const countInWindow = currentOpener === 'yo'
+          ? windowForYo.filter(b => b && getOpener(b) === 'yo').length
+          : openerCount;
+        if (countInWindow >= maxAllowed) {
+          // Strip cette ouverture
+          const openerRegex = new RegExp(`^${currentOpener.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s!?,.']*`, 'i');
+          response = response.replace(openerRegex, '').trim();
+          if (response) response = response.charAt(0).toUpperCase() + response.slice(1);
+          console.log(`[V85] ANTI-REDONDANCE: opener "${currentOpener}" déjà ${countInWindow}x → stripped`);
+        }
+      }
+      if (!response) response = beforeStrip; // Sécurité: jamais vider
+      if (beforeStrip !== response) console.log(`[V85] STRIP: "${beforeStrip.substring(0, 40)}" → "${response.substring(0, 40)}"`);
       if (!response) response = null;
     }
-    // V84: NAME GUARD — "djibril" c'est le BOT, JAMAIS l'utiliser comme prénom du prospect
+    // V85: NAME GUARD — "djibril" c'est le BOT, JAMAIS l'utiliser comme prénom du prospect
+    // MAIS exclure les URLs (djibrilmindset.github.io etc.)
     if (response && /\bdjibril\b/i.test(response)) {
-      response = response.replace(/\b(djibril)\b/gi, 'frérot').replace(/frérot,?\s*frérot/gi, 'frérot');
-      console.log('[V84] NAME GUARD: "djibril" remplacé par "frérot"');
+      // Protéger les URLs d'abord
+      const urls: string[] = [];
+      let safeResp = response.replace(/https?:\/\/[^\s]+/g, (url) => { urls.push(url); return `__URL${urls.length - 1}__`; });
+      // Remplacer djibril HORS des URLs
+      if (/\bdjibril\b/i.test(safeResp)) {
+        safeResp = safeResp.replace(/\b(djibril)\b/gi, 'frérot').replace(/frérot[,\s]*frérot/gi, 'frérot');
+        console.log('[V85] NAME GUARD: "djibril" remplacé par "frérot" (URLs protégées)');
+      }
+      // Restaurer les URLs
+      response = safeResp.replace(/__URL(\d+)__/g, (_, i) => urls[parseInt(i)]);
     }
     // SÉCURITÉ FUNNEL: strip liens interdits selon le step actuel
     if (funnel.funnelStep === 'NEED_VALEUR') {
