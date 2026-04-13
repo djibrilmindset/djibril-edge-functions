@@ -1,14 +1,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V109 — ATOMIC CLAIM ANTI-DOUBLON + MISTRAL LARGE 3 ===
-// Changements vs V108:
-//  1. ATOMIC CLAIM: réserve la place en DB AVANT d'envoyer le DM
-//     - Avant: sendDM() appelé avant updatePendingResponses() → fenêtre de race condition
-//     - Maintenant: UPDATE __PENDING__ → response AVANT sendDM() → le 1er process claim, le 2ème abort
-//  2. Élimine le double-send: si 2 process parallèles génèrent la même réponse,
-//     seul celui qui claim les __PENDING__ en premier envoie le DM
-//  3. Pre-send lock conservé comme sécurité additionnelle
-// Conservé de V108:
+// === V110 — ZERO-MCRES ANTI-DOUBLON TOTAL + MISTRAL LARGE 3 ===
+// Changements vs V109:
+//  1. ZERO-MCRES: JAMAIS retourner mcRes(response) — toujours mcEmpty()
+//     - Avant: sendDM() échoue → mcRes(response) → ManyChat AUSSI envoie le msg = DOUBLON
+//     - Maintenant: sendDM() échoue → setField() backup → mcEmpty() → ManyChat envoie RIEN
+//     - Élimine le dual-path qui causait les 3-4x envois
+//  2. SEND DEDUP: avant sendDM(), re-vérifier qu'aucun autre process n'a envoyé dans les 10s
+//     - Filet de sécurité APRÈS atomic claim, AVANT sendDM()
+//  3. ATOMIC CLAIM conservé (V109)
+// Conservé de V108/V109:
 //  - responded_at, anti-doublon 45s/90s, pre-send lock 30s, __YIELDED__
 // Conservé tel quel:
 //  - Pixtral (images) via api.mistral.ai/v1/chat/completions
@@ -2051,13 +2052,27 @@ export default async function handler(req: Request): Promise<Response> {
         .eq('platform', platform).eq('user_id', userId).eq('bot_response', '__PENDING__')
         .select('id');
       if (!claimData || claimData.length === 0) {
-        console.log(`[V109] 🛑 ATOMIC CLAIM (distress): autre process a déjà claim → ABORT`);
+        console.log(`[V110] 🛑 ATOMIC CLAIM (distress): autre process a déjà claim → ABORT`);
         return mcEmpty();
       }
-      console.log(`[V109] ✅ ATOMIC CLAIM (distress): ${claimData.length} row(s) claimed`);
-      let sent = false;
-      if (subscriberId) { sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
-      return sent ? mcEmpty() : mcRes(response);
+      console.log(`[V110] ✅ ATOMIC CLAIM (distress): ${claimData.length} row(s) claimed`);
+      // V110: SEND DEDUP — vérifier qu'aucun autre process n'a envoyé dans les 10 dernières secondes
+      const { data: distressDedup } = await supabase.from('conversation_history')
+        .select('id, responded_at')
+        .eq('user_id', userId)
+        .neq('bot_response', '__PENDING__').neq('bot_response', '__YIELDED__')
+        .neq('bot_response', '__ADMIN_TAKEOVER__').neq('bot_response', '__OUTBOUND__')
+        .not('responded_at', 'is', null)
+        .gte('responded_at', new Date(Date.now() - 10000).toISOString())
+        .neq('id', claimData[0]?.id) // exclure notre propre claim
+        .limit(1);
+      if (distressDedup && distressDedup.length > 0) {
+        console.log(`[V110] 🛑 SEND DEDUP (distress): autre process a déjà envoyé dans les 10s → SKIP sendDM`);
+        return mcEmpty();
+      }
+      // V110: ZERO-MCRES — toujours mcEmpty(), jamais mcRes()
+      if (subscriberId) { const sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
+      return mcEmpty();
     }
 
     const funnel = getFunnelState(history);
@@ -2556,18 +2571,36 @@ export default async function handler(req: Request): Promise<Response> {
       .eq('platform', platform).eq('user_id', userId).eq('bot_response', '__PENDING__')
       .select('id');
     if (!claimData || claimData.length === 0) {
-      console.log(`[V109] 🛑 ATOMIC CLAIM: autre process a déjà claim les __PENDING__ → ABORT envoi`);
+      console.log(`[V110] 🛑 ATOMIC CLAIM: autre process a déjà claim les __PENDING__ → ABORT envoi`);
       return mcEmpty();
     }
-    console.log(`[V109] ✅ ATOMIC CLAIM: ${claimData.length} row(s) claimed — envoi DM`);
+    console.log(`[V110] ✅ ATOMIC CLAIM: ${claimData.length} row(s) claimed — envoi DM`);
 
-    let sent = false;
-    if (subscriberId) { sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
-    // updatePendingResponses supprimé — déjà fait dans le claim au-dessus
-    return sent ? mcEmpty() : mcRes(response);
+    // V110: SEND DEDUP — dernier filet avant sendDM()
+    // Si un AUTRE process a déjà envoyé dans les 10 dernières secondes → SKIP
+    const { data: sendDedup } = await supabase.from('conversation_history')
+      .select('id, responded_at')
+      .eq('user_id', userId)
+      .neq('bot_response', '__PENDING__').neq('bot_response', '__YIELDED__')
+      .neq('bot_response', '__ADMIN_TAKEOVER__').neq('bot_response', '__OUTBOUND__')
+      .not('responded_at', 'is', null)
+      .gte('responded_at', new Date(Date.now() - 10000).toISOString())
+      .neq('id', claimData[0]?.id) // exclure notre propre claim
+      .limit(1);
+    if (sendDedup && sendDedup.length > 0) {
+      console.log(`[V110] 🛑 SEND DEDUP: autre process a envoyé dans les 10s → SKIP sendDM`);
+      return mcEmpty();
+    }
+
+    // V110: ZERO-MCRES — TOUJOURS mcEmpty(). sendDM() est le SEUL chemin d'envoi.
+    // Si sendDM() échoue → setField() comme backup (ManyChat affiche le custom field)
+    // JAMAIS mcRes(response) — ça causait les 3-4x doublons
+    if (subscriberId) { const sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
+    return mcEmpty();
   } catch (e: any) {
-    console.error('[V65] Error:', e.message);
-    return mcRes("Souci technique, réessaie !");
+    console.error('[V110] Error:', e.message);
+    // V110: même en erreur, JAMAIS mcRes() — retourner vide pour éviter doublon
+    return mcEmpty();
   }
 }
 
