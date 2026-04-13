@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V85 — ANTI-IA + URL-SAFE NAME GUARD + STRIP OUVERTURES + ANTI-MÉLANGE INFO ===
+// === V86 — QUALITY GATE + ANTI-ESQUIVE FORCÉ + BLACKLIST ROBOTIQUE + EMPATHIE SHARP ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -781,7 +781,7 @@ function detectPattern(msg: string): string | null {
   const m = msg.toLowerCase().trim();
   if (/\.ogg|audio|vocal|voice/i.test(msg)) return 'voice_message';
   if (/lookaside\.fbsbx\.com|fbcdn|instagram\.com\/stories|scontent/.test(msg)) return 'image_link';
-  if (/t.?es (un )?(bot|robot|ia|intelligence|chatbot|chat\s*bot|automatique|machine|programme)/i.test(m) || /c.?est (un )?(bot|robot|ia|chatbot)/i.test(m) || /tu es (vraiment )?humain/i.test(m) || /parle.{0,5}(à un|avec un).{0,5}(bot|robot|ia)/i.test(m) || /t.?es pas (un )?vrai/i.test(m) || /r[ée]pond.{0,8}auto/i.test(m)) return 'suspect_bot';
+  if (/t.{0,3}es (un |une )?(bot|robot|ia|intelligence|chatbot|chat\s*bot|automatique|machine|programme)/i.test(m) || /c.?est (un |une )?(bot|robot|ia|chatbot)/i.test(m) || /tu es (vraiment )?humain/i.test(m) || /parle.{0,5}(à un|avec un).{0,5}(bot|robot|ia)/i.test(m) || /t.{0,3}es pas (un )?vrai/i.test(m) || /r[ée]pond.{0,8}auto/i.test(m) || /\b(ia|bot|robot)\b.*\?/i.test(m)) return 'suspect_bot';
   if (/^[\p{Emoji}\s]{1,10}$/u.test(m) && m.replace(/\s/g, '').length <= 10) return 'emoji_only';
   if (/giphy|sticker|gif/.test(m)) return 'sticker_gif';
   if (/tu\s*bug|t.?as\s*bug|ca\s*bug|ça\s*bug/.test(m)) return 'tu_bug';
@@ -1966,6 +1966,64 @@ export default async function handler(req: Request): Promise<Response> {
       // Restaurer les URLs
       response = safeResp.replace(/__URL(\d+)__/g, (_, i) => urls[parseInt(i)]);
     }
+    // V86: HARD QUALITY GATE — rejet automatique des réponses robotiques AVANT tout envoi
+    if (response) {
+      const respLow = response.toLowerCase().trim();
+      const wordCount = respLow.split(/\s+/).length;
+
+      // BLACKLIST: réponses qui trahissent le bot à 100%
+      const blacklist = [
+        /^clairement[.!?,\s]*$/i,
+        /^d[eé]veloppe[.!?,\s]*$/i,
+        /^raconte[.!?,\s]*$/i,
+        /^int[eé]ressant[.!?,\s]*$/i,
+        /^grave[.!?,\s]*$/i,
+        /^exactement[.!?,\s]*$/i,
+        /^carrément[.!?,\s]*$/i,
+        /^ok j['']?capte[.!?,\s]*$/i,
+        /^c.est.à.dire[.!?,\s?]*$/i,
+        /^dis.moi[.!?,\s]*$/i,
+        /^j['']?t['']?[eé]coute[.!?,\s]*$/i,
+        /^vas.y[.!?,\s]*$/i,
+      ];
+      const isBlacklisted = blacklist.some(bl => bl.test(response.trim()));
+
+      // TROP COURT: < 3 mots = robot (sauf "frère c'est moi" type anti-IA)
+      const isTooShort = wordCount < 3 && !(/c'est moi|j'suis là|mdrr/i.test(respLow));
+
+      if (isBlacklisted || isTooShort) {
+        console.log(`[V86] 🚫 QUALITY GATE: "${response}" (${isBlacklisted ? 'BLACKLIST' : 'TOO_SHORT'}) → REGENERATE`);
+        const qualityHint = `\n\n🚨 RÉPONSE REJETÉE: "${response}" — c'est robotique. RÈGLES:\n- MINIMUM 5 mots\n- JAMAIS un seul mot comme "Clairement/Développe/Grave"\n- Rebondis sur un DÉTAIL PRÉCIS de son message: "${msg.substring(0, 60)}"\n- Montre que t'as LU ce qu'il a dit\n- Si il demande ce que tu proposes → réponds DIRECT: "J'accompagne des gens à lancer un business smart"`;
+        const mInfoQ = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
+        const qualityRetry = await generateWithRetry(userId, platform, msg, history, true, mem, profile, isOutbound, mInfoQ, qualityHint);
+        // Si le retry est AUSSI blacklisté → fallback intelligent basé sur son message
+        const retryBlacklisted = blacklist.some(bl => bl.test(qualityRetry.trim())) || qualityRetry.split(/\s+/).length < 3;
+        if (retryBlacklisted) {
+          // Construire une réponse basée sur le message du prospect
+          const userWords = msg.split(/\s+/).filter(w => w.length > 3 && !/^(c'est|dans|avec|pour|mais|aussi|cette|quoi|comment|pourquoi|est-ce)$/i.test(w));
+          if (userWords.length > 0) {
+            const keyword = userWords[Math.floor(Date.now() / 1000) % userWords.length];
+            response = `Quand tu dis "${keyword}", c'est quoi le truc qui te bloque concrètement là-dedans ?`;
+          } else {
+            response = `Dis-moi en vrai, t'en es où concrètement là ?`;
+          }
+          console.log('[V86] Quality retry also bad → keyword fallback');
+        } else {
+          response = qualityRetry;
+        }
+      }
+    }
+
+    // V86: HARD CATCH — "tu propose quoi/c'est quoi ton truc" → réponse directe obligatoire
+    if (response) {
+      const prospectAsksWhat = /tu (proposes?|fais|vends?) quoi|c.?est quoi (ton|le) (truc|délire|offre|programme|service)|tu m.?aide/i.test(msg.toLowerCase());
+      const responseEsquive = response.split(/\s+/).length <= 3 || /^(clairement|ouais|grave|exactement|carrément)/i.test(response.trim());
+      if (prospectAsksWhat && responseEsquive) {
+        response = "J'accompagne des gens à lancer un truc rentable à côté, même en partant de zéro, ça t'intéresse j'peux t'expliquer";
+        console.log('[V86] 🎯 ANTI-ESQUIVE FORCÉE: prospect demande "tu propose quoi" + réponse esquive → réponse directe');
+      }
+    }
+
     // SÉCURITÉ FUNNEL: strip liens interdits selon le step actuel
     if (funnel.funnelStep === 'NEED_VALEUR') {
       // Pas encore envoyé la valeur → INTERDIT landing + calendly
@@ -2025,9 +2083,13 @@ export default async function handler(req: Request): Promise<Response> {
         // Si le retry est AUSSI un doublon → ultime fallback
         if (lastResponses.some(lr => lr.toLowerCase().trim() === retry.toLowerCase().trim()) || calculateSimilarity(retry, response) > 0.4) {
           const userWords = msg.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-          const pick = userWords[Date.now() % Math.max(userWords.length, 1)] || 'ça';
-          response = `"${pick}" — développe un peu ce point`;
-          console.log('[V84] Retry also repeat → word-pick fallback');
+          const pick = userWords[Date.now() % Math.max(userWords.length, 1)] || '';
+          if (pick) {
+            response = `Quand tu dis "${pick}", ça veut dire quoi pour toi concrètement ?`;
+          } else {
+            response = `En vrai, c'est quoi le truc qui te prend le plus la tête là ?`;
+          }
+          console.log('[V86] Retry also repeat → keyword fallback');
         } else {
           response = retry;
         }
