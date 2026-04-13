@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V82 — MISTRAL LARGE + PROMPT CONDENSÉ: zéro hallucination, perf max ===
+// === V83 — MISTRAL LARGE 3 + PROMPT ULTRA-CONDENSÉ + AUDIT COMPLET ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -12,14 +12,13 @@ const BOT_RESPONSE_FIELD_ID = 14462726;
 const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
-// V82: MISTRAL LARGE — cerveau principal. Pixtral = images. GPT-4o-mini-transcribe = audio.
-const MODEL = 'mistral-large-latest';
+// V83: MISTRAL LARGE 3 (ID explicite, meilleur modèle Mistral) — cerveau. Pixtral = images. GPT-4o-mini-transcribe = audio.
+const MODEL = 'mistral-large-2512';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
-const WHISPER_MODEL = 'gpt-4o-mini-transcribe'; // V81: remplace whisper-1 — ZÉRO hallucination
+const WHISPER_MODEL = 'gpt-4o-mini-transcribe'; // anti-hallucination natif
 const MAX_TOKENS = 80;
 const DEBOUNCE_MS = 20000;
 
-let _anthropicKey: string | null = null;
 let _mistralKey: string | null = null;
 let _openaiKey: string | null = null;
 let _mcKey: string | null = null;
@@ -29,17 +28,6 @@ let _techniquesCache: Record<string, any[]> = {};
 let _techniquesFetchedAt = 0;
 const TECH_TTL = 10 * 60 * 1000;
 
-// V78: Anthropic API key pour Claude Opus
-async function getAnthropicKey(): Promise<string | null> {
-  if (_anthropicKey && Date.now() - _keysFetchedAt < KEY_TTL) return _anthropicKey;
-  try {
-    const { data } = await supabase.rpc('get_anthropic_api_key');
-    if (data) { _anthropicKey = data; _keysFetchedAt = Date.now(); return _anthropicKey; }
-  } catch {}
-  // Fallback: clé stockée dans Supabase RPC uniquement (pas de hardcode pour éviter secret scanning)
-  console.log('[V79] ⚠️ Anthropic key not found in RPC, no fallback');
-  return null;
-}
 async function getMistralKey(): Promise<string | null> {
   if (_mistralKey && Date.now() - _keysFetchedAt < KEY_TTL) return _mistralKey;
   try {
@@ -807,7 +795,7 @@ function detectPattern(msg: string): string | null {
 async function getCachedResponse(pattern: string, history: any[]): Promise<string | null> {
   try {
     const { data } = await supabase.from('pattern_cache').select('response_template, phase').eq('pattern_key', pattern).single();
-    if (!data || data.response_template === 'SKIP_TO_CLAUDE' || data.response_template === 'SKIP_TO_MISTRAL') return null;
+    if (!data || data.response_template === 'SKIP_TO_MISTRAL' || data.response_template === 'SKIP_TO_CLAUDE') return null;
     supabase.from('pattern_cache').update({ hit_count: 1, last_used_at: new Date().toISOString() }).eq('pattern_key', pattern).then(() => {});
     return data.response_template;
   } catch { return null; }
@@ -1201,7 +1189,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   }
 
   if (phase === 'DÉTRESSE') {
-    return `DM IG Djibril. FR oral.${memoryBlock}${userSummary}\nDÉTRESSE. ZÉRO vente. Écoute pure. Si suicidaire: 3114.\nMAX 60 chars. ${salamRule} "Adam" INTERDIT.${antiLeakRule}${botBans}${conceptBans}`;
+    return `DM IG Djibril, 23 ans. FR oral.${memoryBlock}${userSummary}\nDÉTRESSE DÉTECTÉE. ZÉRO vente, ZÉRO question d'investigation, ZÉRO technique. ÉCOUTE PURE: "j'suis là frérot", "c'est chaud ce que tu vis", "prends ton temps". Si suicidaire/danger → "appelle le 3114, y'a des gens formés h24". JAMAIS creuser sa douleur ici, JAMAIS pivoter business.\nMAX 60 chars. ${salamRule} "Adam" INTERDIT.${antiLeakRule}${botBans}${conceptBans}`;
   }
 
   let phaseInstr = '';
@@ -1277,9 +1265,10 @@ RÈGLES ABSOLUES:
 4. MIRRORING: reprends SES mots exacts. "j'arrive pas à avancer" → "T'arrives pas à avancer ?"
 5. HUMAIN: bot/IA accusation → "frère c'est moi" détendu 5 mots. Vocaux: t'écoutes (transcription entre crochets), t'en envoies PAS. JAMAIS dire "vocal/audio/message vocal" ni mentionner bug technique.
 6. FRUSTRATION: il se plaint → "Excuse frérot" + réponds à sa VRAIE question d'avant. Priorité absolue.
-7. INAPPROPRIÉ: "c'est ton délire, moi j'parle business" → switch.
+7. INAPPROPRIÉ: porno/drogue/streaming illégal/violence → "chacun son truc, moi j'parle business" et SWITCH direct. JAMAIS poser de question dessus.
 8. BARBER: si c'est SON métier → creuse sa douleur dedans. Sinon → JAMAIS mentionner.
 9. OUVERTURES VARIÉES: jamais "Merci de partager/Intéressant/Courageux". Varie: "Ah ouais/Clairement/J'capte/Mmh/Ok". "Yo" max 1/5 msgs.
+10. "DÉLIRE"/"TON DÉLIRE": UNIQUEMENT quand il parle d'un PROJET/PASSION. JAMAIS sur un simple salut ou une question sérieuse.
 
 SKILLS (activation auto par phase):
 - LABELING: "T'as l'air bloqué", "Ça te saoule" → 3-5 mots oral. JAMAIS "je comprends que tu ressentes". [CREUSER/RÉVÉLER/QUALIFIER]
@@ -1390,7 +1379,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   // Si spirale détectée, injecter un RESET dans le prompt
   const recentResponses = history.map((h: any) => h.bot_response || '').filter(Boolean);
   const isStuck = recentResponses.length >= 3 && recentResponses.slice(-3).some((r, i, arr) => i > 0 && calculateSimilarity(r, arr[0]) > 0.3);
-  // V82: TOUJOURS injecter les dernières réponses pour INTERDIRE la répétition
+  // TOUJOURS injecter les dernières réponses pour INTERDIRE la répétition
   const last5 = recentResponses.slice(-5).filter(r => r.length > 3);
   if (last5.length > 0) {
     sys += `\n\n🚫 RÉPONSES INTERDITES — tu as DÉJÀ dit ces phrases, NE LES RÉPÈTE PAS et ne dis rien de similaire:\n${last5.map((r, i) => `${i+1}. "${r}"`).join('\n')}\nChaque nouvelle réponse DOIT être formulée DIFFÉREMMENT. Mots différents, structure différente, angle différent.`;
@@ -1422,7 +1411,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
     let retryHint = '';
     if (attempt > 0) retryHint = `\n\n⚠️ TENTATIVE ${attempt + 1}: TA RÉPONSE PRÉCÉDENTE ÉTAIT TROP SIMILAIRE À UN MSG DÉJÀ ENVOYÉ. Tu DOIS changer: 1) les MOTS 2) la STRUCTURE 3) l'IDÉE/ANGLE. Si t'as posé une question avant → cette fois VALIDE ou REFORMULE. Si t'as parlé de blocage → parle d'AUTRE CHOSE. TOTALEMENT DIFFÉRENT.`;
     try {
-      // V82: MISTRAL API — system prompt dans messages array
+      // V83: MISTRAL LARGE 3 API — system prompt dans messages array
       const mistralMessages = [{ role: 'system', content: sys + retryHint }, ...messages];
       const r = await fetch('https://api.mistral.ai/v1/chat/completions', {
         method: 'POST',
@@ -1435,14 +1424,14 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
       const result = await r.json();
       if (result.choices?.[0]?.message?.content) {
         const raw = result.choices[0].message.content;
-        // V82: ANTI-SELF-TALK — Mistral peut dérailler, sécurité active
+        // ANTI-SELF-TALK: Mistral peut dérailler, sécurité active
         if (isSelfTalk(raw)) {
           console.log(`[V79] 🚨 SELF-TALK DÉTECTÉ attempt ${attempt + 1}: "${raw.substring(0, 80)}"`);
           retryHint = `\n\n🚨 ERREUR CRITIQUE: Ta réponse était du RAISONNEMENT INTERNE. Tu es Djibril qui parle en DM. Réponds DIRECTEMENT au prospect comme un pote. JAMAIS de méta-commentary.`;
           continue;
         }
         let cleaned = clean(raw);
-        // V82: POST-PROCESSING — coupe 3+ phrases (Mistral peut être verbeux)
+        // POST-PROCESSING: coupe 3+ phrases
         if (cleaned && !cleaned.includes('http') && cleaned.length > 140) {
           // Chercher la fin de la 2ème phrase (pas la 1ère)
           const firstBreak = cleaned.search(/[.!?]\s+[A-ZÀ-Ÿ]/);
