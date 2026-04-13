@@ -1639,20 +1639,20 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   for (let attempt = 0; attempt < 4; attempt++) {
     // V105: backoff 500ms entre retries (évite rate limit Mistral API)
     if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 500));
-    const temp = 0.7 + (attempt * 0.12);
+    const temp = 0.6 + (attempt * 0.12);
     let retryHint = '';
     if (attempt > 0) retryHint = `\n\n⚠️ TENTATIVE ${attempt + 1}: TA RÉPONSE PRÉCÉDENTE ÉTAIT TROP SIMILAIRE À UN MSG DÉJÀ ENVOYÉ. Tu DOIS changer: 1) les MOTS 2) la STRUCTURE 3) l'IDÉE/ANGLE. Si t'as posé une question avant → cette fois VALIDE ou REFORMULE. Si t'as parlé de blocage → parle d'AUTRE CHOSE. TOTALEMENT DIFFÉRENT.`;
     try {
-      // V105: MISTRAL MEDIUM 3.1 — system prompt en role:system + messages user/assistant
+      // V108: MISTRAL LARGE 3 (675B/41B MoE) — system prompt en role:system + messages user/assistant
       const systemPrompt = sys + retryHint;
       const mistralMessages: any[] = [{ role: 'system', content: systemPrompt }];
       for (const m of messages) {
         if (m.role === 'system') continue; // déjà injecté au-dessus
         mistralMessages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
       }
-      // V87: TIMEOUT 15s — si Mistral hang, on passe au retry suivant
+      // V108: TIMEOUT 20s — Large 3 (675B MoE) peut prendre plus de temps
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
+      const timeout = setTimeout(() => controller.abort(), 20000);
       const r = await fetch('https://api.mistral.ai/v1/chat/completions', {
         method: 'POST',
         headers: {
