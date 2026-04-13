@@ -1,11 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V115 — FIX DELIVERY: mcRes FALLBACK WHEN sendDM FAILS ===
-// Changements vs V114:
-//  1. sendDM fail → return mcRes(response) au lieu de mcEmpty() → ManyChat délivre dans le flow
-//  2. sendDM success → return mcEmpty() pour éviter doublon
-//  3. Fix la fenêtre 24h: ManyChat ne compte PAS les External Requests comme interactions
-//  4. REMOVED message_tag 'HUMAN_AGENT' from sendDM() (V114)
+// === V116 — FIX DUPLICATES: DEBOUNCE 45s + SEND DEDUP 60s ===
+// Changements vs V115:
+//  1. DEBOUNCE_MS: 20s → 45s — messages rapprochés ne déclenchent plus 2 réponses
+//  2. SEND DEDUP window: 10s → 60s — vérifie sur 60s au lieu de 10s avant envoi
+//  3. mcRes fallback conservé (V115)
 // Conservé: savePending DEDUP, ATOMIC CLAIM, delivery_status tracking
 // Conservé de V108/V109:
 //  - responded_at, anti-doublon 45s/90s, pre-send lock 30s, __YIELDED__
@@ -29,7 +28,7 @@ const MODEL = 'mistral-large-2512';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'gpt-4o-mini-transcribe'; // anti-hallucination natif
 const MAX_TOKENS = 130;
-const DEBOUNCE_MS = 20000;
+const DEBOUNCE_MS = 45000; // V116: 45s (was 20s) — fix duplicates sur messages rapprochés
 
 let _anthropicKey: string | null = null;
 let _mistralKey: string | null = null; // conservé pour Pixtral (images)
@@ -2085,18 +2084,18 @@ export default async function handler(req: Request): Promise<Response> {
         return mcEmpty();
       }
       console.log(`[V110] ✅ ATOMIC CLAIM (distress): ${claimData.length} row(s) claimed`);
-      // V110: SEND DEDUP — vérifier qu'aucun autre process n'a envoyé dans les 10 dernières secondes
+      // V116: SEND DEDUP — vérifier qu'aucun autre process n'a envoyé dans les 60 dernières secondes
       const { data: distressDedup } = await supabase.from('conversation_history')
         .select('id, responded_at')
         .eq('user_id', userId)
         .neq('bot_response', '__PENDING__').neq('bot_response', '__YIELDED__')
         .neq('bot_response', '__ADMIN_TAKEOVER__').neq('bot_response', '__OUTBOUND__')
         .not('responded_at', 'is', null)
-        .gte('responded_at', new Date(Date.now() - 10000).toISOString())
+        .gte('responded_at', new Date(Date.now() - 60000).toISOString())
         .neq('id', claimData[0]?.id) // exclure notre propre claim
         .limit(1);
       if (distressDedup && distressDedup.length > 0) {
-        console.log(`[V110] 🛑 SEND DEDUP (distress): autre process a déjà envoyé dans les 10s → SKIP sendDM`);
+        console.log(`[V116] 🛑 SEND DEDUP (distress): autre process a déjà envoyé dans les 60s → SKIP sendDM`);
         return mcEmpty();
       }
       // V115: TRY sendDM → if fail, fallback to mcRes (ManyChat flow delivery)
@@ -2622,19 +2621,19 @@ export default async function handler(req: Request): Promise<Response> {
     }
     console.log(`[V110] ✅ ATOMIC CLAIM: ${claimData.length} row(s) claimed — envoi DM`);
 
-    // V110: SEND DEDUP — dernier filet avant sendDM()
-    // Si un AUTRE process a déjà envoyé dans les 10 dernières secondes → SKIP
+    // V116: SEND DEDUP — dernier filet avant sendDM()
+    // Si un AUTRE process a déjà envoyé dans les 60 dernières secondes → SKIP
     const { data: sendDedup } = await supabase.from('conversation_history')
       .select('id, responded_at')
       .eq('user_id', userId)
       .neq('bot_response', '__PENDING__').neq('bot_response', '__YIELDED__')
       .neq('bot_response', '__ADMIN_TAKEOVER__').neq('bot_response', '__OUTBOUND__')
       .not('responded_at', 'is', null)
-      .gte('responded_at', new Date(Date.now() - 10000).toISOString())
+      .gte('responded_at', new Date(Date.now() - 60000).toISOString())
       .neq('id', claimData[0]?.id) // exclure notre propre claim
       .limit(1);
     if (sendDedup && sendDedup.length > 0) {
-      console.log(`[V110] 🛑 SEND DEDUP: autre process a envoyé dans les 10s → SKIP sendDM`);
+      console.log(`[V116] 🛑 SEND DEDUP: autre process a envoyé dans les 60s → SKIP sendDM`);
       return mcEmpty();
     }
 
