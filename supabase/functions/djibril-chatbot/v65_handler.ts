@@ -379,6 +379,7 @@ function detectDistress(msg: string, history: any[]): boolean {
     /tout est noir/i, /envie de (mourir|en finir|disparaitre|disparaître)/i,
     /je (veux|voudrais) (mourir|en finir|disparaitre)/i, /(suicide|suicid|me tuer|me faire du mal)/i,
     /rien ne va|plus envie de rien/i, /plus aucun (sens|espoir|raison)/i,
+    /(veux|voudrais) plus vivre/i, /ça sert (à|a) rien/i, /j.?en peux (vraiment |)plus/i,
     /je (sers|vaux) à rien/i, /personne (m.?aime|me comprend)/i,
     /dépression|dépressif|déprimé/i, /pensées (noires|sombres)/i,
     /crise.{0,15}(angoisse|panique|anxiété)/i, /j.?ai (envie de|plus la force)/i
