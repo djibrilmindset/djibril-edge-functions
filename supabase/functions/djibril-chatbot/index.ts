@@ -1,15 +1,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V108 — MISTRAL LARGE 3 (675B MoE) + ANTI-DOUBLON RESPONDED_AT ===
-// Changements vs V106:
-//  1. Colonne responded_at: enregistre le VRAI moment où le bot écrit sa réponse
-//     - Avant: anti-doublon comparait created_at (timestamp message USER) → décalage 30-40s
-//     - Maintenant: compare responded_at (timestamp RÉEL réponse bot) → précision à la seconde
-//  2. Anti-doublon V107: yield si responded_at < 45s (couvre debounce + génération)
-//  3. Post-debounce V107: yield si responded_at < 90s (couvre cycle complet)
-//  4. PRE-SEND LOCK: check final JUSTE avant sendDM() — si un autre process a répondu
-//     pendant notre génération Mistral (< 30s), abort immédiat
-//  5. __YIELDED__ tag: les pending orphelins sont marqués proprement au lieu de rester __PENDING__
+// === V109 — ATOMIC CLAIM ANTI-DOUBLON + MISTRAL LARGE 3 ===
+// Changements vs V108:
+//  1. ATOMIC CLAIM: réserve la place en DB AVANT d'envoyer le DM
+//     - Avant: sendDM() appelé avant updatePendingResponses() → fenêtre de race condition
+//     - Maintenant: UPDATE __PENDING__ → response AVANT sendDM() → le 1er process claim, le 2ème abort
+//  2. Élimine le double-send: si 2 process parallèles génèrent la même réponse,
+//     seul celui qui claim les __PENDING__ en premier envoie le DM
+//  3. Pre-send lock conservé comme sécurité additionnelle
+// Conservé de V108:
+//  - responded_at, anti-doublon 45s/90s, pre-send lock 30s, __YIELDED__
 // Conservé tel quel:
 //  - Pixtral (images) via api.mistral.ai/v1/chat/completions
 //  - GPT-4o-mini-transcribe (audio)
@@ -2045,9 +2045,18 @@ export default async function handler(req: Request): Promise<Response> {
       console.log('[V65] DISTRESS MODE');
       const mInfo = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
       const response = await generateWithRetry(userId, platform, msg, history, true, mem, profile, isOutbound, mInfo);
+      // V109: ATOMIC CLAIM — réserver la place en DB AVANT d'envoyer le DM
+      const { data: claimData } = await supabase.from('conversation_history')
+        .update({ bot_response: response, responded_at: new Date().toISOString() })
+        .eq('platform', platform).eq('user_id', userId).eq('bot_response', '__PENDING__')
+        .select('id');
+      if (!claimData || claimData.length === 0) {
+        console.log(`[V109] 🛑 ATOMIC CLAIM (distress): autre process a déjà claim → ABORT`);
+        return mcEmpty();
+      }
+      console.log(`[V109] ✅ ATOMIC CLAIM (distress): ${claimData.length} row(s) claimed`);
       let sent = false;
       if (subscriberId) { sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
-      await updatePendingResponses(platform, userId, response);
       return sent ? mcEmpty() : mcRes(response);
     }
 
@@ -2539,9 +2548,22 @@ export default async function handler(req: Request): Promise<Response> {
       }
     }
 
+    // V109: ATOMIC CLAIM — réserver la place en DB AVANT d'envoyer le DM
+    // Le premier process qui UPDATE les __PENDING__ gagne (atomique PostgreSQL)
+    // Le second trouve 0 rows __PENDING__ → abort avant sendDM()
+    const { data: claimData } = await supabase.from('conversation_history')
+      .update({ bot_response: response, responded_at: new Date().toISOString() })
+      .eq('platform', platform).eq('user_id', userId).eq('bot_response', '__PENDING__')
+      .select('id');
+    if (!claimData || claimData.length === 0) {
+      console.log(`[V109] 🛑 ATOMIC CLAIM: autre process a déjà claim les __PENDING__ → ABORT envoi`);
+      return mcEmpty();
+    }
+    console.log(`[V109] ✅ ATOMIC CLAIM: ${claimData.length} row(s) claimed — envoi DM`);
+
     let sent = false;
     if (subscriberId) { sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
-    await updatePendingResponses(platform, userId, response);
+    // updatePendingResponses supprimé — déjà fait dans le claim au-dessus
     return sent ? mcEmpty() : mcRes(response);
   } catch (e: any) {
     console.error('[V65] Error:', e.message);
