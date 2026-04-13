@@ -1,14 +1,16 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V102 — MIGRATION CLAUDE SONNET 4.6 + BUILDPROMPT V101 ===
-// Changements vs V100:
-//  1. Chat core: Mistral Large 3 → Claude Sonnet 4.6 (api.anthropic.com/v1/messages)
-//  2. Clé API: secret env ANTHROPIC_API_KEY (fallback RPC get_anthropic_api_key)
-//  3. buildPrompt refondu: 3 règles motrices + OBJECTIF/EXEMPLES par phase + style oral varié
-//  4. Fix bug disobarber: phase ACCUEIL ne creuse plus au msg 1, mirror littéral strict
-//  5. Tics bannis: we jvois, jfais, jpense, en vrai, ta pas tord, tu vois ce que jveu dire
-//  6. Ponctuation tirets/em-dash/points/!/.../émojis interdite
-// Conservé: Pixtral (images) + GPT-4o-mini-transcribe (audio) + toute la logique funnel/qual/détresse
+// === V103 — CLEANUP MISTRAL (chat core 100% Claude, Pixtral isolé) ===
+// Changements vs V102:
+//  1. Chat core: 100% Claude Sonnet 4.6 (plus aucun appel chat à Mistral)
+//  2. Clé Pixtral renommée pour clarté (_pixtralKey / getPixtralKey), usage limité à describeImage
+//  3. Logs / commentaires purgés des références "Mistral" dans le flow chat
+//  4. Zéro code mort lié à l'ancien modèle chat
+// Conservé tel quel:
+//  - buildPrompt V101 (3 règles motrices + OBJECTIF/EXEMPLES par phase + style oral varié)
+//  - Pixtral (images) via api.mistral.ai/v1/chat/completions (SEUL reste Mistral, isolé)
+//  - GPT-4o-mini-transcribe (audio)
+//  - Toute la logique funnel / qual / détresse / anti-répétition
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -20,7 +22,7 @@ const BOT_RESPONSE_FIELD_ID = 14462726;
 const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
-// V102: CLAUDE SONNET 4.6 — cerveau chat (remplace Mistral). Pixtral = images (conservé). GPT-4o-mini-transcribe = audio (conservé).
+// V103: CLAUDE SONNET 4.6 — cerveau chat. Pixtral = images (isolé). GPT-4o-mini-transcribe = audio.
 const MODEL = 'claude-sonnet-4-6';
 const ANTHROPIC_VERSION = '2023-06-01';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
@@ -955,7 +957,7 @@ function getPhase(history: any[], msg: string, isDistress: boolean, mem: Prospec
   return { phase: 'CLOSER', n, trust, funnel, offerPitched, qual };
 }
 
-// ANTI-SELF-TALK: détecte si Mistral a sorti son raisonnement interne au lieu de répondre
+// ANTI-SELF-TALK: détecte si le modèle a sorti son raisonnement interne au lieu de répondre
 function isSelfTalk(text: string): boolean {
   const lower = text.toLowerCase();
   const selfTalkPatterns = [
@@ -990,7 +992,7 @@ function clean(text: string): string {
   r = r.replace(/\bAdam\b/gi, 'toi');
   // BARBER CONTEXTUEL V72: on strip PAS les termes coiffure/barber si le prospect bosse dedans
   // Le système gère ça via le prompt — ici on strip seulement les INVENTIONS du bot (tondeuse, fade, etc. non-dits par le prospect)
-  // Strip seulement les termes TECHNIQUES barber que Mistral invente (pas les termes que le prospect a utilisés)
+  // Strip seulement les termes TECHNIQUES barber que le modèle invente (pas les termes que le prospect a utilisés)
   r = r.replace(/\b(barberie|barber\s*shop|barbershop)\b/gi, 'ton activité');
   // ANTI-DEBUG MARKERS: strip (XXX chars) qui leak dans les messages
   r = r.replace(/\(\d+\s*chars?\)/gi, '').replace(/\(\d+\s*caractères?\)/gi, '');
@@ -1081,7 +1083,7 @@ function clean(text: string): string {
   r = r.replace(/__CLEANURL(\d+)__/g, (_, i) => _urls[parseInt(i)]);
   // Nettoyage espaces multiples après strips
   r = r.replace(/\s{2,}/g, ' ').trim();
-  // V88 TRONCATURE: seuil 250 — Mistral génère max ~130 tokens ≈ 500 chars, mais clean() strip beaucoup
+  // V88 TRONCATURE: seuil 250 — le modèle génère max ~130 tokens ≈ 500 chars, mais clean() strip beaucoup
   // Le prompt gère la longueur cible, ici on protège juste contre les dérapages
   if (r.length > 250) {
     // Extraire les URLs présentes dans le texte
@@ -1137,7 +1139,7 @@ function clean(text: string): string {
   r = r.replace(/[,;:\-–—]\s*$/, '').trim();
   // ANTI-POINT FINAL: un mec de 23 ans met pas de point à la fin en DM
   r = r.replace(/\.\s*$/, '').trim();
-  // V75: CORRECTEUR ORTHO ORAL — fix les fautes classiques de Mistral SANS casser le ton oral
+  // V75: CORRECTEUR ORTHO ORAL — fix les fautes classiques du modèle SANS casser le ton oral
   // Règle: on corrige les VRAIS mots mal écrits, PAS les contractions voulues (j'capte, t'as, etc.)
   const orthoFixes: [RegExp, string][] = [
     [/\bTinquiète\b/g, "T'inquiète"],
@@ -1544,15 +1546,15 @@ function buildTruthReminder(mem: ProspectMemory): string | null {
 
 function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory, mediaCtx?: string | null): any[] {
   const msgs: any[] = [];
-  // V90: FILTRER l'historique pollué — ne PAS envoyer les réponses robotiques à Mistral
-  // Sinon Mistral apprend que "Clairement" / "Développe" / réponses 1-mot sont OK
+  // V90: FILTRER l'historique pollué — ne PAS envoyer les réponses robotiques au modèle
+  // Sinon le modèle apprend que "Clairement" / "Développe" / réponses 1-mot sont OK
   const TOXIC_RESPONSES = /^(clairement|d[eé]veloppe|raconte|int[eé]ressant|grave|exactement|carr[eé]ment|ok j.?capte|c.est.[aà].dire|dis.moi|j.?t.?[eé]coute|vas.y|mmh vas.y|ah ouais raconte|ok et apr[eè]s|genre comment [çc]a|et du coup|et apr[eè]s|ok|ouais|ah ok|je vois|je comprends?|effectivement|totalement|absolument)[.!?,\s]*$/i;
   const TOXIC_SHORT = /^.{1,15}$/; // Réponses < 15 chars souvent robotiques
   for (const h of history.slice(-20)) {
     if (h.user_message) msgs.push({ role: 'user', content: h.user_message });
     if (h.bot_response) {
       const br = (h.bot_response || '').trim();
-      // V90: skip les réponses toxiques — Mistral ne les verra JAMAIS
+      // V90: skip les réponses toxiques — le modèle ne les verra JAMAIS
       if (TOXIC_RESPONSES.test(br)) {
         console.log(`[V90] 🧹 HISTORY FILTER: skipped toxic "${br}"`);
         // Remplacer par une réponse neutre pour garder le flow user/assistant
@@ -2024,14 +2026,14 @@ export default async function handler(req: Request): Promise<Response> {
     // Forcer pattern vocal si détecté au body level (priorité sur image_link)
     const pattern = isVoiceMessage ? 'voice_message' : detectPattern(msg);
     const recentBotMsgs = history.map((h: any) => h.bot_response || '').filter(Boolean);
-    // DÉTECTION SPIRALE: si parmi les 3 dernières réponses, 2+ se ressemblent → forcer Mistral avec reset
+    // DÉTECTION SPIRALE: si parmi les 3 dernières réponses, 2+ se ressemblent → forcer régénération avec reset
     const lastThree = recentBotMsgs.slice(-3);
     const isStuck = lastThree.length >= 3 && (
       calculateSimilarity(lastThree[0], lastThree[1]) > 0.3 ||
       calculateSimilarity(lastThree[1], lastThree[2]) > 0.3 ||
       calculateSimilarity(lastThree[0], lastThree[2]) > 0.3
     );
-    if (isStuck) console.log('[V65] ⚠️ SPIRALE DÉTECTÉE — forçage Mistral avec reset');
+    if (isStuck) console.log('[V65] ⚠️ SPIRALE DÉTECTÉE — forçage régénération avec reset');
     let response: string | null = null;
     // V85: ANTI-IA CATCH — si le prospect accuse bot/IA, FORCER la réponse "frère c'est moi"
     const botAccusePattern = /\b(bot|robot|ia|intelligence artificielle|automatique|chatgpt|gpt|chatbot)\b/i;
@@ -2059,10 +2061,10 @@ export default async function handler(req: Request): Promise<Response> {
     if (pattern === 'voice_message' || pattern === 'image_link') {
       if (mediaProcessedText && mediaContext) {
         // ✅ MÉDIA TRAITÉ AVEC SUCCÈS — on passe au chatbot avec le contexte
-        console.log(`[V69] ✅ Média traité (${media.type}) — envoi à Mistral avec contexte`);
-        // On ne set PAS response ici — on laisse tomber dans le flow normal Mistral
+        console.log(`[V69] ✅ Média traité (${media.type}) — envoi au modèle avec contexte`);
+        // On ne set PAS response ici — on laisse tomber dans le flow normal Claude
         // mais on injecte le contexte média dans le message utilisateur
-        // Le message effectif pour Mistral = transcription vocal OU texte original + contexte image
+        // Le message effectif pour Claude = transcription vocal OU texte original + contexte image
         // Ceci sera géré dans buildMessages ci-dessous
       } else {
         // ❌ TRAITEMENT ÉCHOUÉ — fallback sur le deflect classique
@@ -2197,8 +2199,8 @@ export default async function handler(req: Request): Promise<Response> {
       }
       // ANTI-BOUCLE: vérifier que la réponse pattern n'est pas déjà envoyée récemment
       if (response && isTooSimilar(response, recentBotMsgs)) {
-        console.log('[V65] Pattern response trop similaire à récent → fallback Mistral');
-        response = null; // forcer Mistral à générer un truc frais
+        console.log('[V65] Pattern response trop similaire à récent → fallback Claude');
+        response = null; // forcer Claude à générer un truc frais
       }
       if (response && hasSalamBeenSaid(history)) {
         response = response.replace(/^salam[\s!?.]*(?:aleykoum)?[\s!?.]*(?:fr[eé]rot)?[\s!?.]*/i, '').trim();
@@ -2209,7 +2211,7 @@ export default async function handler(req: Request): Promise<Response> {
     if (!response) {
       const mInfo2 = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
       response = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile, isOutbound, mInfo2);
-      console.log(`[V79] MISTRAL ${response.length}c`);
+      console.log(`[V79] CLAUDE ${response.length}c`);
     }
     if (hasSalamBeenSaid(history) && /^salam/i.test(response)) {
       response = response.replace(/^salam[\s!?.]*(?:aleykoum)?[\s!?.]*(?:fr[eé]rot)?[\s!?.,]*/i, '').trim();
@@ -2322,7 +2324,7 @@ export default async function handler(req: Request): Promise<Response> {
       ];
       // V93: HARD BLACKLIST — "Djibril" utilisé comme prénom du prospect = REJET TOTAL
       const containsDjibril = /\bdjibril\b/i.test(response.replace(/https?:\/\/[^\s]+/g, ''));
-      // V93: Trop long = Mistral délire (max 40 mots pour un DM)
+      // V93: Trop long = le modèle délire (max 40 mots pour un DM)
       const isTooLong = response.split(/\s+/).length > 40;
       const isBlacklisted = blacklist.some(bl => bl.test(response.trim())) || containsDjibril || isTooLong;
 
@@ -2426,7 +2428,7 @@ export default async function handler(req: Request): Promise<Response> {
           }
         }
       }
-      // V84: Si repeat → RÉGÉNÉRER avec Mistral + instruction anti-repeat explicite, PAS un fallback générique
+      // V84: Si repeat → RÉGÉNÉRER avec Claude + instruction anti-repeat explicite, PAS un fallback générique
       if (isRepeat) {
         console.log('[V84] Regenerating with explicit anti-repeat...');
         const retryHint = `\n\n🚨 TA DERNIÈRE RÉPONSE "${response}" ÉTAIT UN DOUBLON. Génère quelque chose de COMPLÈTEMENT DIFFÉRENT. Rebondis sur un DÉTAIL PRÉCIS du message du prospect. JAMAIS de question générique type "Développe/Raconte/C'est-à-dire/Qu'est-ce qui te bloque". Cite un MOT EXACT de son message et creuse dessus.`;
@@ -2448,7 +2450,7 @@ export default async function handler(req: Request): Promise<Response> {
       }
     }
     // V92: ANTI-BOUCLE STRUCTURELLE SUPPRIMÉE — les statements forcés étaient HORS CONTEXTE
-    // Le problème sera géré par Mistral + frequency_penalty + les handlers directs V92
+    // Le problème sera géré par Claude + les handlers directs V92
 
     // V94: FINAL CLEAN — strip emoji + ponctuation bizarre sur TOUTE réponse avant envoi
     // Sécurité ultime — aucun emoji ne doit jamais atteindre le prospect
