@@ -23,8 +23,8 @@ const BOT_RESPONSE_FIELD_ID = 14462726;
 const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
-// V105: MISTRAL MEDIUM 3.1 — cerveau chat. Pixtral = images (même clé API). GPT-4o-mini-transcribe = audio.
-const MODEL = 'mistral-medium-3-1-25-08';
+// V105: MISTRAL MEDIUM — cerveau chat. Pixtral = images (même clé API). GPT-4o-mini-transcribe = audio.
+const MODEL = 'mistral-medium-latest';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'gpt-4o-mini-transcribe'; // anti-hallucination natif
 const MAX_TOKENS = 130;
