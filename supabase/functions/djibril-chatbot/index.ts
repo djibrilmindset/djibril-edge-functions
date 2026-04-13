@@ -1,10 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V112 — SENDDM DIAGNOSTIC + RETRY + DB DELIVERY TRACKING ===
-// Changements vs V111:
-//  1. delivery_status écrit en DB après chaque sendDM → queryable sans logs
-//  2. sendDM() avec RETRY (2 tentatives) + logging complet (status, body)
-//  3. subscriber_id validation (NaN check)
+// === V113 — INLINE DEPLOY + SAVEPENDING DEDUP + DELIVERY TRACKING ===
+// Changements vs V112:
+//  1. INLINE DEPLOY — plus de GitHub raw URL (élimine cache Deno)
+//  2. savePending() DEDUP — si __PENDING__ existe dans les 30s, skip insert
+//  3. ATOMIC CLAIM → delivery_status écrit sur TOUTES les rows claimed
+//  4. delivery_status, sendDM retry, subscriber_id validation (V112)
 // Conservé: ZERO-MCRES, SEND DEDUP, ATOMIC CLAIM
 // Conservé de V108/V109:
 //  - responded_at, anti-doublon 45s/90s, pre-send lock 30s, __YIELDED__
@@ -402,6 +403,18 @@ async function getPendingMessages(platform: string, userId: string, afterTimesta
 
 async function savePending(platform: string, userId: string, msg: string): Promise<{ id?: string; created_at: string }> {
   try {
+    // V113: DEDUP — si un __PENDING__ existe déjà pour ce user dans les 30s, skip insert
+    const recentCutoff = new Date(Date.now() - 30000).toISOString();
+    const { data: existing } = await supabase.from('conversation_history')
+      .select('id, created_at')
+      .eq('platform', platform).eq('user_id', userId).eq('bot_response', '__PENDING__')
+      .gte('created_at', recentCutoff)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (existing && existing.length > 0) {
+      console.log(`[V113] savePending DEDUP: __PENDING__ already exists (id=${existing[0].id}) — skip insert`);
+      return { id: existing[0].id, created_at: existing[0].created_at };
+    }
     const created_at = new Date().toISOString();
     const { data } = await supabase.from('conversation_history').insert([{ platform, user_id: userId, user_message: msg, bot_response: '__PENDING__', created_at }]).select('id, created_at');
     if (data && data.length > 0) return { id: data[0].id, created_at: data[0].created_at };
@@ -2095,8 +2108,12 @@ export default async function handler(req: Request): Promise<Response> {
       } else {
         console.error(`[V112] 🚨 DISTRESS: subscriberId is NULL — cannot send DM! userId=${userId}`);
       }
-      // Write delivery status to DB
-      if (claimData?.[0]?.id) await supabase.from('conversation_history').update({ delivery_status: `distress:${dlvStatus}:sub=${subscriberId||'null'}` }).eq('id', claimData[0].id);
+      // V113: Write delivery status to ALL claimed rows
+      if (claimData && claimData.length > 0) {
+        const claimedIds = claimData.map((r: any) => r.id);
+        await supabase.from('conversation_history').update({ delivery_status: `distress:${dlvStatus}:sub=${subscriberId||'null'}` }).in('id', claimedIds);
+        console.log(`[V113] DISTRESS delivery_status written to ${claimedIds.length} rows: ${dlvStatus}`);
+      }
       return mcEmpty();
     }
 
@@ -2628,8 +2645,12 @@ export default async function handler(req: Request): Promise<Response> {
     } else {
       console.error(`[V112] 🚨 subscriberId is NULL — cannot send DM! userId=${userId}`);
     }
-    // Write delivery status to DB
-    if (claimData?.[0]?.id) await supabase.from('conversation_history').update({ delivery_status: `normal:${dlvStatus}:sub=${subscriberId||'null'}` }).eq('id', claimData[0].id);
+    // V113: Write delivery status to ALL claimed rows (not just first)
+    if (claimData && claimData.length > 0) {
+      const claimedIds = claimData.map((r: any) => r.id);
+      await supabase.from('conversation_history').update({ delivery_status: `normal:${dlvStatus}:sub=${subscriberId||'null'}` }).in('id', claimedIds);
+      console.log(`[V113] delivery_status written to ${claimedIds.length} rows: ${dlvStatus}`);
+    }
     return mcEmpty();
   } catch (e: any) {
     console.error('[V110] Error:', e.message);
