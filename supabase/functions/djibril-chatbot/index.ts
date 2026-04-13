@@ -1,16 +1,17 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V104 — FIX BOUCLE FALLBACK + CLEANUP MISTRAL ===
-// Changements vs V103:
-//  1. Seuil similarité anti-repeat relevé 0.25 → 0.4 (trop de rejets légitimes)
-//  2. Fallback keyword: 8 templates variés au lieu d'un seul (anti-boucle)
-//  3. Seuil retry-aussi-repeat relevé 0.4 → 0.5
-//  4. Historique prospect 371758781 purgé (réponses fallback toxiques supprimées)
+// === V105 — RETOUR MISTRAL MEDIUM 3.1 (chat) + PROMPT OPTIMISÉ ===
+// Changements vs V104:
+//  1. Chat model: Claude Sonnet 4.6 → Mistral Medium 3.1 (mistral-medium-3-1-25-08)
+//  2. API: api.anthropic.com → api.mistral.ai (OpenAI-compatible format)
+//  3. Clé: ANTHROPIC_API_KEY → MISTRAL_API_KEY (même getMistralKey pour chat + images)
+//  4. System prompt injecté en role:system dans messages[] (format Mistral)
+//  5. Response: result.content[0].text → result.choices[0].message.content
 // Conservé tel quel:
 //  - buildPrompt V101 (3 règles motrices + OBJECTIF/EXEMPLES par phase + style oral varié)
-//  - Pixtral (images) via api.mistral.ai/v1/chat/completions (SEUL reste Mistral, isolé)
+//  - Pixtral (images) via api.mistral.ai/v1/chat/completions (même endpoint, modèle différent)
 //  - GPT-4o-mini-transcribe (audio)
-//  - Toute la logique funnel / qual / détresse / anti-répétition
+//  - Toute la logique funnel / qual / détresse / anti-répétition / V104 fallback varié
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -22,9 +23,8 @@ const BOT_RESPONSE_FIELD_ID = 14462726;
 const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
-// V103: CLAUDE SONNET 4.6 — cerveau chat. Pixtral = images (isolé). GPT-4o-mini-transcribe = audio.
-const MODEL = 'claude-sonnet-4-6';
-const ANTHROPIC_VERSION = '2023-06-01';
+// V105: MISTRAL MEDIUM 3.1 — cerveau chat. Pixtral = images (même clé API). GPT-4o-mini-transcribe = audio.
+const MODEL = 'mistral-medium-3-1-25-08';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'gpt-4o-mini-transcribe'; // anti-hallucination natif
 const MAX_TOKENS = 130;
@@ -1595,8 +1595,8 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory, 
 }
 
 async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile, isOutbound: boolean = false, mediaInfo?: { type: 'image' | 'audio' | null; processedText: string | null; context: string | null }, extraHint?: string): Promise<string> {
-  // V102: CLAUDE SONNET 4.6 via Anthropic Messages API
-  const key = await getAnthropicKey();
+  // V105: MISTRAL MEDIUM 3.1 via Mistral Chat Completions API (OpenAI-compatible)
+  const key = await getMistralKey();
   if (!key) return 'Souci technique, réessaie dans 2 min';
   const isDistress = isDistressOrStuck === true && detectDistress(msg, history);
   const phaseResult = getPhase(history, msg, isDistress, mem, isOutbound);
@@ -1634,67 +1634,65 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   console.log(`[V69] Phase=${phaseResult.phase} Trust=${phaseResult.trust} Funnel=${phaseResult.funnel.funnelStep} Qual=${phaseResult.qual} #${phaseResult.n + 1}${isStuck ? ' ⚠️STUCK' : ''}${mText ? ` 📎MEDIA=${mType}` : ''}`);
 
   for (let attempt = 0; attempt < 4; attempt++) {
-    // V102: backoff 500ms entre retries (évite rate limit Anthropic API)
+    // V105: backoff 500ms entre retries (évite rate limit Mistral API)
     if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 500));
     const temp = 0.7 + (attempt * 0.12);
     let retryHint = '';
     if (attempt > 0) retryHint = `\n\n⚠️ TENTATIVE ${attempt + 1}: TA RÉPONSE PRÉCÉDENTE ÉTAIT TROP SIMILAIRE À UN MSG DÉJÀ ENVOYÉ. Tu DOIS changer: 1) les MOTS 2) la STRUCTURE 3) l'IDÉE/ANGLE. Si t'as posé une question avant → cette fois VALIDE ou REFORMULE. Si t'as parlé de blocage → parle d'AUTRE CHOSE. TOTALEMENT DIFFÉRENT.`;
     try {
-      // V102: CLAUDE SONNET 4.6 — system prompt passé en paramètre séparé, messages sans role:system
+      // V105: MISTRAL MEDIUM 3.1 — system prompt en role:system + messages user/assistant
       const systemPrompt = sys + retryHint;
-      const claudeMessages = messages
-        .filter((m: any) => m.role !== 'system')
-        .map((m: any) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }));
-      // V87: TIMEOUT 15s — si Claude hang, on passe au retry suivant
+      const mistralMessages: any[] = [{ role: 'system', content: systemPrompt }];
+      for (const m of messages) {
+        if (m.role === 'system') continue; // déjà injecté au-dessus
+        mistralMessages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
+      }
+      // V87: TIMEOUT 15s — si Mistral hang, on passe au retry suivant
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000);
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
+      const r = await fetch('https://api.mistral.ai/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': key,
-          'anthropic-version': ANTHROPIC_VERSION
+          'Authorization': `Bearer ${key}`
         },
         body: JSON.stringify({
           model: MODEL,
           max_tokens: tokens,
           temperature: temp,
-          system: systemPrompt,
-          messages: claudeMessages
+          messages: mistralMessages
         }),
         signal: controller.signal
       });
       clearTimeout(timeout);
       const result = await r.json();
-      // V102: Claude retourne result.content[0].text (pas result.choices[0].message.content)
-      if (result.content?.[0]?.text) {
-        const raw = result.content[0].text;
+      // V105: Mistral retourne result.choices[0].message.content (format OpenAI)
+      if (result.choices?.[0]?.message?.content) {
+        const raw = result.choices[0].message.content;
         // ANTI-SELF-TALK: sécurité conservée
         if (isSelfTalk(raw)) {
-          console.log(`[V102] 🚨 SELF-TALK DÉTECTÉ attempt ${attempt + 1}: "${raw.substring(0, 80)}"`);
+          console.log(`[V105] 🚨 SELF-TALK DÉTECTÉ attempt ${attempt + 1}: "${raw.substring(0, 80)}"`);
           retryHint = `\n\n🚨 ERREUR CRITIQUE: Ta réponse était du RAISONNEMENT INTERNE. Tu es Djibril qui parle en DM. Réponds DIRECTEMENT au prospect comme un pote. JAMAIS de méta-commentary.`;
           continue;
         }
         let cleaned = clean(raw);
         // POST-PROCESSING: coupe 3+ phrases
         if (cleaned && !cleaned.includes('http') && cleaned.length > 140) {
-          // Chercher la fin de la 2ème phrase (pas la 1ère)
           const firstBreak = cleaned.search(/[.!?]\s+[A-ZÀ-Ÿ]/);
           if (firstBreak > 20) {
             const afterFirst = cleaned.substring(firstBreak + 1);
             const secondBreak = afterFirst.search(/[.!?]\s+[A-ZÀ-Ÿ]/);
             if (secondBreak > 10) {
-              // 3+ phrases → garder les 2 premières
               cleaned = cleaned.substring(0, firstBreak + 1 + secondBreak + 1).trim();
             }
           }
         }
         if (cleaned && !isTooSimilar(cleaned, recentResponses)) return cleaned;
-        console.log(`[V65] Attempt ${attempt + 1} ${!cleaned ? 'empty after clean' : 'too similar'}`);
+        console.log(`[V105] Attempt ${attempt + 1} ${!cleaned ? 'empty after clean' : 'too similar'}`);
         continue;
       }
-      console.error('[V102] Claude API error:', JSON.stringify(result).substring(0, 200));
-    } catch (e: any) { console.error('[V102] error:', e.message); }
+      console.error('[V105] Mistral API error:', JSON.stringify(result).substring(0, 200));
+    } catch (e: any) { console.error('[V105] error:', e.message); }
   }
   // V93: Fallbacks = KEYWORD-BASED d'abord, puis empathiques si pas de keyword
   // On extrait un mot-clé du message du prospect pour faire un fallback contextuel
