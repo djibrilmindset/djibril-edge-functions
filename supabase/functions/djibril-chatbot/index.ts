@@ -1,12 +1,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V106 — MISTRAL LARGE 2 (chat) + ANTI-RÉPÉTITION RENFORCÉE ===
-// Changements vs V105:
-//  1. Chat model: Mistral Medium → Mistral Large 2 (mistral-large-latest)
-//     - Meilleure compréhension émotionnelle + instruction-following
-//     - 262k tokens contexte (2x Medium) → voit TOUTE la conversation
-//     - Latence +0.5-1s mais qualité SIGNIFICATIVEMENT supérieure
-//  2. Seuil similarité anti-répétition: 0.4 → 0.3 (plus strict, Large gère mieux)
+// === V107 — ANTI-DOUBLON RESPONDED_AT + PRE-SEND LOCK ===
+// Changements vs V106:
+//  1. Colonne responded_at: enregistre le VRAI moment où le bot écrit sa réponse
+//     - Avant: anti-doublon comparait created_at (timestamp message USER) → décalage 30-40s
+//     - Maintenant: compare responded_at (timestamp RÉEL réponse bot) → précision à la seconde
+//  2. Anti-doublon V107: yield si responded_at < 45s (couvre debounce + génération)
+//  3. Post-debounce V107: yield si responded_at < 90s (couvre cycle complet)
+//  4. PRE-SEND LOCK: check final JUSTE avant sendDM() — si un autre process a répondu
+//     pendant notre génération Mistral (< 30s), abort immédiat
+//  5. __YIELDED__ tag: les pending orphelins sont marqués proprement au lieu de rester __PENDING__
 // Conservé tel quel:
 //  - Pixtral (images) via api.mistral.ai/v1/chat/completions
 //  - GPT-4o-mini-transcribe (audio)
@@ -369,7 +372,7 @@ async function getHistory(platform: string, userId: string): Promise<any[]> {
   try {
     const { data } = await supabase.from('conversation_history').select('user_message, bot_response, created_at').eq('platform', platform).eq('user_id', userId).order('created_at', { ascending: false }).limit(100);
     // Filter out __PENDING__, __ADMIN_TAKEOVER__ and __OUTBOUND__ responses from history (only use complete exchanges)
-    const filtered = (data || []).filter((h: any) => h.bot_response !== '__PENDING__' && h.bot_response !== '__ADMIN_TAKEOVER__' && h.bot_response !== '__OUTBOUND__').reverse();
+    const filtered = (data || []).filter((h: any) => h.bot_response !== '__PENDING__' && h.bot_response !== '__ADMIN_TAKEOVER__' && h.bot_response !== '__OUTBOUND__' && h.bot_response !== '__YIELDED__').reverse();
     return filtered;
   } catch { return []; }
 }
@@ -392,7 +395,8 @@ async function savePending(platform: string, userId: string, msg: string): Promi
 
 async function updatePendingResponses(platform: string, userId: string, response: string): Promise<void> {
   try {
-    await supabase.from('conversation_history').update({ bot_response: response }).eq('platform', platform).eq('user_id', userId).eq('bot_response', '__PENDING__');
+    // V107: set responded_at = NOW so anti-doublon checks use REAL bot response time
+    await supabase.from('conversation_history').update({ bot_response: response, responded_at: new Date().toISOString() }).eq('platform', platform).eq('user_id', userId).eq('bot_response', '__PENDING__');
   } catch {}
 }
 
@@ -1860,7 +1864,27 @@ export default async function handler(req: Request): Promise<Response> {
       }
     }
 
-    // === V70.3c ANTI-DOUBLON: verrou per-user — si le bot a répondu il y a <15s, yield ===
+    // === V107 ANTI-DOUBLON: utilise responded_at (VRAI moment de réponse bot) au lieu de created_at ===
+    // Étape 1: Check responded_at (précis — quand le bot a VRAIMENT écrit sa réponse)
+    const { data: recentByRespondedAt } = await supabase.from('conversation_history')
+      .select('responded_at, bot_response')
+      .eq('user_id', userId)
+      .neq('bot_response', '__PENDING__')
+      .neq('bot_response', '__ADMIN_TAKEOVER__')
+      .neq('bot_response', '__OUTBOUND__')
+      .not('responded_at', 'is', null)
+      .order('responded_at', { ascending: false })
+      .limit(1);
+    if (recentByRespondedAt && recentByRespondedAt.length > 0) {
+      const realResponseTime = new Date(recentByRespondedAt[0].responded_at).getTime();
+      const secsSinceRealResponse = (Date.now() - realResponseTime) / 1000;
+      // V107: Si le bot a VRAIMENT répondu il y a moins de 45s → YIELD (couvre debounce + génération)
+      if (secsSinceRealResponse < 45) {
+        console.log(`[V107] 🛑 ANTI-DOUBLON (responded_at): bot a répondu il y a ${secsSinceRealResponse.toFixed(1)}s réels → YIELD`);
+        return mcEmpty();
+      }
+    }
+    // Étape 2: Fallback sur created_at pour les anciennes entrées sans responded_at
     const { data: recentResponse } = await supabase.from('conversation_history')
       .select('created_at, bot_response')
       .eq('user_id', userId)
@@ -1873,18 +1897,8 @@ export default async function handler(req: Request): Promise<Response> {
       const lastResponseTime = new Date(recentResponse[0].created_at).getTime();
       const secsSinceLastResponse = (Date.now() - lastResponseTime) / 1000;
       if (secsSinceLastResponse < DEBOUNCE_MS / 1000) {
-        // V75: anti-doublon aligné sur le debounce (40s)
-        const { data: lastUserMsg } = await supabase.from('conversation_history')
-          .select('user_message')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false })
-          .limit(1);
-        const lastMsg = lastUserMsg?.[0]?.user_message || '';
-        // V77: ANTI-DOUBLON aligné sur debounce (20s) + protection identique
-        if (secsSinceLastResponse < (DEBOUNCE_MS / 1000) || lastMsg === effectiveUserMessage) {
-          console.log(`[V81] 🛑 ANTI-DOUBLON: bot a répondu il y a ${secsSinceLastResponse.toFixed(1)}s (seuil=${DEBOUNCE_MS/1000}s), msg=${lastMsg === effectiveUserMessage ? 'IDENTIQUE' : 'DIFF'} → YIELD`);
-          return mcEmpty();
-        }
+        console.log(`[V107] 🛑 ANTI-DOUBLON (created_at fallback): ${secsSinceLastResponse.toFixed(1)}s → YIELD`);
+        return mcEmpty();
       }
     }
 
@@ -1924,8 +1938,27 @@ export default async function handler(req: Request): Promise<Response> {
       return mcEmpty();
     }
 
-    // V76: VERROU POST-DEBOUNCE — après 48s d'attente (40+5+3), un AUTRE process a peut-être déjà répondu
-    // On recheck la DB pour voir si un bot_response a été enregistré pendant notre attente
+    // V107: VERROU POST-DEBOUNCE — utilise responded_at pour détecter si un AUTRE process a répondu pendant notre attente
+    // Check 1: responded_at (précis)
+    const { data: postDebounceRespondedAt } = await supabase.from('conversation_history')
+      .select('bot_response, responded_at')
+      .eq('user_id', userId)
+      .neq('bot_response', '__PENDING__')
+      .neq('bot_response', '__ADMIN_TAKEOVER__')
+      .neq('bot_response', '__OUTBOUND__')
+      .not('responded_at', 'is', null)
+      .order('responded_at', { ascending: false })
+      .limit(1);
+    if (postDebounceRespondedAt && postDebounceRespondedAt.length > 0) {
+      const realTime = new Date(postDebounceRespondedAt[0].responded_at).getTime();
+      const secsSinceReal = (Date.now() - realTime) / 1000;
+      // V107: Si un process a répondu il y a < 90s (couvre debounce 28s + génération 15s + marge) → YIELD
+      if (secsSinceReal < 90) {
+        console.log(`[V107] 🛑 POST-DEBOUNCE (responded_at): autre process a répondu il y a ${secsSinceReal.toFixed(1)}s réels → YIELD`);
+        return mcEmpty();
+      }
+    }
+    // Check 2: fallback created_at pour anciennes entrées
     const { data: postDebounceCheck } = await supabase.from('conversation_history')
       .select('bot_response, created_at')
       .eq('user_id', userId)
@@ -1937,9 +1970,8 @@ export default async function handler(req: Request): Promise<Response> {
     if (postDebounceCheck && postDebounceCheck.length > 0) {
       const postDebounceTime = new Date(postDebounceCheck[0].created_at).getTime();
       const secsSincePostDebounce = (Date.now() - postDebounceTime) / 1000;
-      // Si un AUTRE process a répondu pendant notre debounce (< 60s) → YIELD
       if (secsSincePostDebounce < 60) {
-        console.log(`[V76] 🛑 VERROU POST-DEBOUNCE: un autre process a répondu il y a ${secsSincePostDebounce.toFixed(1)}s → YIELD`);
+        console.log(`[V107] 🛑 POST-DEBOUNCE (created_at fallback): ${secsSincePostDebounce.toFixed(1)}s → YIELD`);
         return mcEmpty();
       }
     }
@@ -2483,6 +2515,28 @@ export default async function handler(req: Request): Promise<Response> {
       response = response.replace(/\s{2,}/g, ' ').trim();
       if (!response) response = "Vas-y dis-moi";
       console.log(`[V94] FINAL CLEAN done, ${response.length}c`);
+    }
+
+    // V107: VERROU PRE-SEND FINAL — dernier check avant envoi pour éviter tout doublon
+    // Si un AUTRE process a répondu pendant notre génération Mistral (responded_at < 30s) → YIELD
+    const { data: preSendCheck } = await supabase.from('conversation_history')
+      .select('responded_at, bot_response')
+      .eq('user_id', userId)
+      .neq('bot_response', '__PENDING__')
+      .neq('bot_response', '__ADMIN_TAKEOVER__')
+      .neq('bot_response', '__OUTBOUND__')
+      .not('responded_at', 'is', null)
+      .order('responded_at', { ascending: false })
+      .limit(1);
+    if (preSendCheck && preSendCheck.length > 0) {
+      const preSendTime = new Date(preSendCheck[0].responded_at).getTime();
+      const secsSincePreSend = (Date.now() - preSendTime) / 1000;
+      if (secsSincePreSend < 30) {
+        console.log(`[V107] 🛑 PRE-SEND LOCK: autre process a répondu il y a ${secsSincePreSend.toFixed(1)}s → ABORT envoi`);
+        // Nettoyer les __PENDING__ orphelins
+        await supabase.from('conversation_history').update({ bot_response: '__YIELDED__', responded_at: new Date().toISOString() }).eq('platform', platform).eq('user_id', userId).eq('bot_response', '__PENDING__');
+        return mcEmpty();
+      }
     }
 
     let sent = false;
