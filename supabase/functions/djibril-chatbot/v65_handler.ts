@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V89 — URL-FIX-ORDER + ANTI-BIO + ANTI-IA-12 + FALLBACKS-SAFE + SEMANTIC-REPEAT + RETRY-BACKOFF + PRIX-DIRECT ===
+// === V90 — ANTI-REPEAT-TOTAL + FREQ-PENALTY + HISTORY-FILTER + FALLBACK-DIVERSIFY ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -1422,9 +1422,29 @@ function buildTruthReminder(mem: ProspectMemory): string | null {
 
 function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory, mediaCtx?: string | null): any[] {
   const msgs: any[] = [];
+  // V90: FILTRER l'historique pollué — ne PAS envoyer les réponses robotiques à Mistral
+  // Sinon Mistral apprend que "Clairement" / "Développe" / réponses 1-mot sont OK
+  const TOXIC_RESPONSES = /^(clairement|d[eé]veloppe|raconte|int[eé]ressant|grave|exactement|carr[eé]ment|ok j.?capte|c.est.[aà].dire|dis.moi|j.?t.?[eé]coute|vas.y|mmh vas.y|ah ouais raconte|ok et apr[eè]s|genre comment [çc]a)[.!?,\s]*$/i;
+  const TOXIC_SHORT = /^.{1,15}$/; // Réponses < 15 chars souvent robotiques
   for (const h of history.slice(-20)) {
     if (h.user_message) msgs.push({ role: 'user', content: h.user_message });
-    if (h.bot_response) msgs.push({ role: 'assistant', content: h.bot_response });
+    if (h.bot_response) {
+      const br = (h.bot_response || '').trim();
+      // V90: skip les réponses toxiques — Mistral ne les verra JAMAIS
+      if (TOXIC_RESPONSES.test(br)) {
+        console.log(`[V90] 🧹 HISTORY FILTER: skipped toxic "${br}"`);
+        // Remplacer par une réponse neutre pour garder le flow user/assistant
+        msgs.push({ role: 'assistant', content: 'Vas-y dis-moi' });
+        continue;
+      }
+      // V90: skip les réponses ultra-courtes (1-2 mots) qui sont du bruit
+      if (br.split(/\s+/).length <= 2 && br.length < 20 && !/https?:\/\//.test(br)) {
+        console.log(`[V90] 🧹 HISTORY FILTER: skipped short "${br}"`);
+        msgs.push({ role: 'assistant', content: 'Continue, je t\'écoute' });
+        continue;
+      }
+      msgs.push({ role: 'assistant', content: br });
+    }
   }
   // Injecter un rappel anti-hallucination JUSTE avant le message actuel
   const truthCheck = buildTruthReminder(mem);
@@ -1507,7 +1527,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${key}`
         },
-        body: JSON.stringify({ model: MODEL, max_tokens: tokens, temperature: temp, messages: mistralMessages }),
+        body: JSON.stringify({ model: MODEL, max_tokens: tokens, temperature: temp, frequency_penalty: 0.4 + (attempt * 0.15), presence_penalty: 0.3 + (attempt * 0.1), messages: mistralMessages }),
         signal: controller.signal
       });
       clearTimeout(timeout);
@@ -1541,14 +1561,17 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
       console.error('[V65] API error:', JSON.stringify(result).substring(0, 200));
     } catch (e: any) { console.error('[V65] error:', e.message); }
   }
-  // V89: Fallbacks nettoyés — zéro question banned, zéro 1-mot robotique
+  // V90: Fallbacks diversifiés — mix QUESTIONS + STATEMENTS + CHALLENGES (jamais que des questions)
   const fallbacks = [
-    "Genre comment ça exactement ?", "Et du coup t'en es où avec ça ?",
-    "T'en es où concrètement là-dessus ?", "Ok et après, t'as fait quoi ?",
-    "Ça fait combien de temps que t'es dans ce truc ?", "Et t'as fait quoi pour changer ça ?",
-    "Genre quoi par exemple ?", "Ça te pèse depuis longtemps ce truc ?",
-    "Et concrètement ça donne quoi au quotidien ?", "T'as déjà essayé de changer ça ?",
-    "Et le pire dans tout ça c'est quoi ?", "Ça ressemble à quoi une journée type pour toi ?"
+    // QUESTIONS (variées)
+    "Genre comment ça exactement ?", "Ok et après, t'as fait quoi ?",
+    "Ça fait combien de temps que t'es dans ce truc ?", "Genre quoi par exemple ?",
+    // STATEMENTS (pas de question — casse la boucle question-question)
+    "En vrai je vois le truc, t'es pas le premier à me dire ça", "Ça me rappelle un gars qui était exactement dans la même situation",
+    "Le truc c'est que 90% des gens dans ta situation font la même erreur", "J'te cache pas, ce que tu décris c'est un schéma classique",
+    // CHALLENGES (provoque une réaction)
+    "Mais en vrai t'es prêt à changer ou tu veux juste en parler", "Le vrai sujet c'est pas ce que tu dis, c'est ce que tu fais pas",
+    "Ça fait combien de fois que tu te dis la même chose sans bouger", "La question c'est pas si t'es capable, c'est si t'es vraiment décidé",
   ];
   const usedLower = recentResponses.map(r => r.toLowerCase().trim());
   const available = fallbacks.filter(f => {
@@ -2049,20 +2072,33 @@ export default async function handler(req: Request): Promise<Response> {
       const respLow = response.toLowerCase().trim();
       const wordCount = respLow.split(/\s+/).length;
 
-      // BLACKLIST: réponses qui trahissent le bot à 100%
+      // V90 BLACKLIST: réponses qui trahissent le bot à 100%
       const blacklist = [
         /^clairement[.!?,\s]*$/i,
+        /^clairement,/i, // V90: attrape "Clairement, [suite]" — pattern IA classique
         /^d[eé]veloppe[.!?,\s]*$/i,
         /^raconte[.!?,\s]*$/i,
         /^int[eé]ressant[.!?,\s]*$/i,
         /^grave[.!?,\s]*$/i,
         /^exactement[.!?,\s]*$/i,
-        /^carrément[.!?,\s]*$/i,
+        /^carr[eé]ment[.!?,\s]*$/i,
         /^ok j['']?capte[.!?,\s]*$/i,
-        /^c.est.à.dire[.!?,\s?]*$/i,
+        /^c.est.[aà].dire[.!?,\s?]*$/i,
         /^dis.moi[.!?,\s]*$/i,
         /^j['']?t['']?[eé]coute[.!?,\s]*$/i,
         /^vas.y[.!?,\s]*$/i,
+        /^effectivement[.!?,\s]*$/i, // V90
+        /^totalement[.!?,\s]*$/i, // V90
+        /^absolument[.!?,\s]*$/i, // V90
+        /^en effet[.!?,\s]*$/i, // V90
+        /^je comprends?[.!?,\s]*$/i, // V90
+        /^je vois[.!?,\s]*$/i, // V90
+        /^ah ouais[.!?,\s]*$/i, // V90
+        /^mmh[.!?,\s]*$/i, // V90
+        /^ok[.!?,\s]*$/i, // V90
+        /^ouais[.!?,\s]*$/i, // V90
+        /^trop bien[.!?,\s]*$/i, // V90
+        /^ah ok[.!?,\s]*$/i, // V90
       ];
       const isBlacklisted = blacklist.some(bl => bl.test(response.trim()));
 
@@ -2187,6 +2223,25 @@ export default async function handler(req: Request): Promise<Response> {
         }
       }
     }
+    // V90: ANTI-BOUCLE STRUCTURELLE — si les 3 dernières réponses sont des questions → forcer un statement
+    if (lastBotCheck && lastBotCheck.length >= 3) {
+      const last3 = lastBotCheck.slice(0, 3).map(r => (r.bot_response || '').trim());
+      const allQuestions = last3.every(r => /\?$/.test(r));
+      if (allQuestions && /\?$/.test(response.trim())) {
+        console.log('[V90] 🔄 STRUCTURE LOOP: 3+ questions consécutives → forcing statement');
+        // Transformer la question en statement
+        const statements = [
+          "En vrai je vois exactement ton problème, et c'est plus courant que tu crois",
+          "Le truc c'est que t'es pas bloqué par ce que tu penses, c'est autre chose",
+          "J'te cache pas, la majorité des gens dans ta situation font la même erreur",
+          "Ça me parle ce que tu dis, j'ai accompagné quelqu'un dans le même délire",
+          "Le vrai sujet c'est pas le problème en lui-même, c'est la façon dont tu l'abordes",
+        ];
+        const avail = statements.filter(s => !lastBotCheck.some((lr: any) => calculateSimilarity(s, lr.bot_response || '') > 0.3));
+        response = (avail.length ? avail : statements)[Date.now() % (avail.length || statements.length)];
+      }
+    }
+
     let sent = false;
     if (subscriberId) { sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
     await updatePendingResponses(platform, userId, response);
