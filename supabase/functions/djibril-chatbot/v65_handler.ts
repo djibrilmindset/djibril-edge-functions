@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V86 — QUALITY GATE + ANTI-ESQUIVE FORCÉ + BLACKLIST ROBOTIQUE + EMPATHIE SHARP ===
+// === V87 — TIMEOUT MISTRAL + ANTI-INJECTION + ANTI-ESQUIVE ÉLARGI + QUALITY GATE ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -1393,7 +1393,13 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory, 
   if (mediaCtx) {
     msgs.push({ role: 'user', content: `[CONTEXTE INTERNE — INVISIBLE AU PROSPECT]\n${mediaCtx}` });
   }
-  msgs.push({ role: 'user', content: currentMsg });
+  // V87: ANTI-INJECTION — strip les tentatives de manipulation du prompt
+  const safeMsg = currentMsg
+    .replace(/ignore (all |les |tout |toutes )?(previous |pr[eé]c[eé]dent|above|ci-dessus)/gi, '')
+    .replace(/you are now|tu es maintenant|system:|assistant:|<\/?system>/gi, '')
+    .replace(/new instructions?|nouvelles? instructions?/gi, '')
+    .replace(/forget (everything|all|tout)/gi, '');
+  msgs.push({ role: 'user', content: safeMsg });
   const cleaned: any[] = [];
   let lastRole = '';
   for (const m of msgs) {
@@ -1450,14 +1456,19 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
     try {
       // V83: MISTRAL LARGE 3 API — system prompt dans messages array
       const mistralMessages = [{ role: 'system', content: sys + retryHint }, ...messages];
+      // V87: TIMEOUT 15s — si Mistral hang, on passe au retry suivant
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
       const r = await fetch('https://api.mistral.ai/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${key}`
         },
-        body: JSON.stringify({ model: MODEL, max_tokens: tokens, temperature: temp, messages: mistralMessages })
+        body: JSON.stringify({ model: MODEL, max_tokens: tokens, temperature: temp, messages: mistralMessages }),
+        signal: controller.signal
       });
+      clearTimeout(timeout);
       const result = await r.json();
       if (result.choices?.[0]?.message?.content) {
         const raw = result.choices[0].message.content;
@@ -2014,13 +2025,27 @@ export default async function handler(req: Request): Promise<Response> {
       }
     }
 
-    // V86: HARD CATCH — "tu propose quoi/c'est quoi ton truc" → réponse directe obligatoire
+    // V87: HARD CATCH — prospect demande une explication directe → JAMAIS esquiver
     if (response) {
-      const prospectAsksWhat = /tu (proposes?|fais|vends?) quoi|c.?est quoi (ton|le) (truc|délire|offre|programme|service)|tu m.?aide/i.test(msg.toLowerCase());
-      const responseEsquive = response.split(/\s+/).length <= 3 || /^(clairement|ouais|grave|exactement|carrément)/i.test(response.trim());
+      const msgLow = msg.toLowerCase();
+      const prospectAsksWhat = /tu (proposes?|fais|vends?|offres?) quoi/i.test(msgLow) ||
+        /c.?est quoi (ton|le|ce) (truc|d[eé]lire|offre|programme|service|concept)/i.test(msgLow) ||
+        /tu m.?aide|tu peux m.?aider|comment tu (peux|aide)/i.test(msgLow) ||
+        /(c.?est|ca change|ça change) quoi pour moi/i.test(msgLow) ||
+        /c.?est pour qui|c.?est quoi (exactement|concr[eè]tement)/i.test(msgLow) ||
+        /tu proposes? quoi (exactement|concr[eè]tement)/i.test(msgLow) ||
+        /okay.{0,10}(tu proposes?|c.?est quoi|explique)/i.test(msgLow);
+      const responseEsquive = response.split(/\s+/).length <= 4 || /^(clairement|ouais|grave|exactement|carrément|en vrai|j'capte)/i.test(response.trim());
       if (prospectAsksWhat && responseEsquive) {
-        response = "J'accompagne des gens à lancer un truc rentable à côté, même en partant de zéro, ça t'intéresse j'peux t'expliquer";
-        console.log('[V86] 🎯 ANTI-ESQUIVE FORCÉE: prospect demande "tu propose quoi" + réponse esquive → réponse directe');
+        const antiEsquivePool = [
+          "J'accompagne des gens à lancer un truc rentable à côté, même en partant de zéro, ça t'intéresse j'peux t'expliquer",
+          "En gros j'aide les gens à monter un business smart sans y passer leur vie, j'te montre si tu veux",
+          "J'ai un truc qui permet de générer des revenus à côté de ton activité, sans pub et sans y passer 10h/j",
+        ];
+        const usedEsq = recentBotMsgs.filter(r => antiEsquivePool.some(a => calculateSimilarity(r, a) > 0.3));
+        const availEsq = antiEsquivePool.filter(a => !usedEsq.some(u => calculateSimilarity(a, u) > 0.3));
+        response = (availEsq.length ? availEsq : antiEsquivePool)[Date.now() % (availEsq.length || antiEsquivePool.length)];
+        console.log('[V87] 🎯 ANTI-ESQUIVE FORCÉE: prospect demande explication + réponse esquive → réponse directe');
       }
     }
 
