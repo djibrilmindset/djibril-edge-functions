@@ -1,15 +1,14 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V105 — RETOUR MISTRAL MEDIUM 3.1 (chat) + PROMPT OPTIMISÉ ===
-// Changements vs V104:
-//  1. Chat model: Claude Sonnet 4.6 → Mistral Medium 3.1 (mistral-medium-3-1-25-08)
-//  2. API: api.anthropic.com → api.mistral.ai (OpenAI-compatible format)
-//  3. Clé: ANTHROPIC_API_KEY → MISTRAL_API_KEY (même getMistralKey pour chat + images)
-//  4. System prompt injecté en role:system dans messages[] (format Mistral)
-//  5. Response: result.content[0].text → result.choices[0].message.content
+// === V106 — MISTRAL LARGE 2 (chat) + ANTI-RÉPÉTITION RENFORCÉE ===
+// Changements vs V105:
+//  1. Chat model: Mistral Medium → Mistral Large 2 (mistral-large-latest)
+//     - Meilleure compréhension émotionnelle + instruction-following
+//     - 262k tokens contexte (2x Medium) → voit TOUTE la conversation
+//     - Latence +0.5-1s mais qualité SIGNIFICATIVEMENT supérieure
+//  2. Seuil similarité anti-répétition: 0.4 → 0.3 (plus strict, Large gère mieux)
 // Conservé tel quel:
-//  - buildPrompt V101 (3 règles motrices + OBJECTIF/EXEMPLES par phase + style oral varié)
-//  - Pixtral (images) via api.mistral.ai/v1/chat/completions (même endpoint, modèle différent)
+//  - Pixtral (images) via api.mistral.ai/v1/chat/completions
 //  - GPT-4o-mini-transcribe (audio)
 //  - Toute la logique funnel / qual / détresse / anti-répétition / V104 fallback varié
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
@@ -23,8 +22,8 @@ const BOT_RESPONSE_FIELD_ID = 14462726;
 const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
-// V105: MISTRAL MEDIUM — cerveau chat. Pixtral = images (même clé API). GPT-4o-mini-transcribe = audio.
-const MODEL = 'mistral-medium-latest';
+// V106: MISTRAL LARGE 2 — cerveau chat. Meilleure compréhension + anti-répétition + 262k contexte.
+const MODEL = 'mistral-large-latest';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'gpt-4o-mini-transcribe'; // anti-hallucination natif
 const MAX_TOKENS = 130;
@@ -1671,7 +1670,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
         const raw = result.choices[0].message.content;
         // ANTI-SELF-TALK: sécurité conservée
         if (isSelfTalk(raw)) {
-          console.log(`[V105] 🚨 SELF-TALK DÉTECTÉ attempt ${attempt + 1}: "${raw.substring(0, 80)}"`);
+          console.log(`[V106] 🚨 SELF-TALK DÉTECTÉ attempt ${attempt + 1}: "${raw.substring(0, 80)}"`);
           retryHint = `\n\n🚨 ERREUR CRITIQUE: Ta réponse était du RAISONNEMENT INTERNE. Tu es Djibril qui parle en DM. Réponds DIRECTEMENT au prospect comme un pote. JAMAIS de méta-commentary.`;
           continue;
         }
@@ -1688,11 +1687,11 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
           }
         }
         if (cleaned && !isTooSimilar(cleaned, recentResponses)) return cleaned;
-        console.log(`[V105] Attempt ${attempt + 1} ${!cleaned ? 'empty after clean' : 'too similar'}`);
+        console.log(`[V106] Attempt ${attempt + 1} ${!cleaned ? 'empty after clean' : 'too similar'}`);
         continue;
       }
-      console.error('[V105] Mistral API error:', JSON.stringify(result).substring(0, 200));
-    } catch (e: any) { console.error('[V105] error:', e.message); }
+      console.error('[V106] Mistral API error:', JSON.stringify(result).substring(0, 200));
+    } catch (e: any) { console.error('[V106] error:', e.message); }
   }
   // V93: Fallbacks = KEYWORD-BASED d'abord, puis empathiques si pas de keyword
   // On extrait un mot-clé du message du prospect pour faire un fallback contextuel
@@ -2416,11 +2415,11 @@ export default async function handler(req: Request): Promise<Response> {
           isRepeat = true;
         }
       }
-      // V104: SIMILARITY CHECK (seuil relevé 0.4 — 0.25 rejetait trop de réponses légitimes)
+      // V106: SIMILARITY CHECK (seuil 0.3 — Mistral Large suit mieux les instructions, moins de faux positifs)
       if (!isRepeat) {
         for (const lastR of lastResponses) {
-          if (lastR && calculateSimilarity(response, lastR) > 0.4) {
-            console.log(`[V104] SIM REPEAT: "${response.substring(0, 40)}" ~ "${lastR.substring(0, 40)}" → REGENERATE`);
+          if (lastR && calculateSimilarity(response, lastR) > 0.3) {
+            console.log(`[V106] SIM REPEAT: "${response.substring(0, 40)}" ~ "${lastR.substring(0, 40)}" → REGENERATE`);
             isRepeat = true;
             break;
           }
