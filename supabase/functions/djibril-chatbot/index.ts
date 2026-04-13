@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V107 — ANTI-DOUBLON RESPONDED_AT + PRE-SEND LOCK ===
+// === V108 — MISTRAL LARGE 3 (675B MoE) + ANTI-DOUBLON RESPONDED_AT ===
 // Changements vs V106:
 //  1. Colonne responded_at: enregistre le VRAI moment où le bot écrit sa réponse
 //     - Avant: anti-doublon comparait created_at (timestamp message USER) → décalage 30-40s
@@ -25,8 +25,8 @@ const BOT_RESPONSE_FIELD_ID = 14462726;
 const LINK_VALEUR = 'https://djibrilmindset.github.io/djibril-learning-site/';
 const LINK_LANDING = 'https://djibrilmindset.github.io/djibril-ads-landing/';
 const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
-// V106: MISTRAL LARGE 2 — cerveau chat. Meilleure compréhension + anti-répétition + 262k contexte.
-const MODEL = 'mistral-large-latest';
+// V108: MISTRAL LARGE 3 (675B/41B MoE) — le plus intelligent de Mistral. 262k contexte.
+const MODEL = 'mistral-large-2512';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'gpt-4o-mini-transcribe'; // anti-hallucination natif
 const MAX_TOKENS = 130;
