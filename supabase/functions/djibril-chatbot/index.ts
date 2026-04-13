@@ -1702,8 +1702,8 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   if (keywords.length > 0) {
     const kw = keywords[Date.now() % keywords.length];
     const kwFallbacks = [
-      `Tu parles de "${kw}" — c'est quoi le truc qui te bloque là-dedans ?`,
-      `"${kw}" — ça veut dire quoi concrètement dans ta situation ?`,
+      `Tu parles de "${kw}", c'est quoi le truc qui te bloque là-dedans ?`,
+      `"${kw}", ça veut dire quoi concrètement dans ta situation ?`,
       `Quand tu dis "${kw}", c'est quoi le plus dur pour toi ?`,
     ];
     dynamicFallback = kwFallbacks[Date.now() % kwFallbacks.length];
@@ -2438,16 +2438,16 @@ export default async function handler(req: Request): Promise<Response> {
           const pick = userWords[Date.now() % Math.max(userWords.length, 1)] || '';
           // V104: FALLBACK VARIÉ — 8 templates au lieu d'un seul
           const fallbackTemplates = pick ? [
-            `"${pick}" — concrètement ça se passe comment ?`,
+            `"${pick}", concrètement ça se passe comment ?`,
             `T'as dit "${pick}", ça ressemble à quoi dans ta journée ?`,
             `Le truc "${pick}" là, c'est depuis quand ?`,
             `Quand tu parles de "${pick}", c'est quoi le vrai blocage ?`,
-            `"${pick}" — en gros t'es où là-dedans aujourd'hui ?`,
+            `"${pick}", en gros t'es où là-dedans aujourd'hui ?`,
             `Le "${pick}", ça te coûte quoi au quotidien ?`,
-            `Attends, "${pick}" — tu veux dire quoi par là exactement ?`,
-            `"${pick}" — c'est le genre de truc qui te freine ou qui te motive ?`,
+            `Attends, "${pick}", tu veux dire quoi par là exactement ?`,
+            `"${pick}", c'est le genre de truc qui te freine ou qui te motive ?`,
           ] : [
-            `En vrai là, c'est quoi ton plus gros blocage ?`,
+            `C'est quoi ton plus gros blocage là ?`,
             `Concrètement, c'est quoi qui te prend le plus la tête ?`,
             `Si tu devais changer un seul truc demain matin, ce serait quoi ?`,
             `Là maintenant, c'est quoi qui te freine le plus ?`,
