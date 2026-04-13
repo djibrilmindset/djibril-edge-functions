@@ -1,12 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V114 — FIX SENDDM: REMOVE HUMAN_AGENT TAG (INSTAGRAM INVALID) ===
-// Changements vs V113:
-//  1. REMOVED message_tag 'HUMAN_AGENT' from sendDM() — INVALID on Instagram, caused ALL DMs to fail
-//  2. savePending() DEDUP (V113)
-//  3. ATOMIC CLAIM → delivery_status écrit sur TOUTES les rows claimed (V113)
-//  4. delivery_status, sendDM retry, subscriber_id validation (V112)
-// Conservé: ZERO-MCRES, SEND DEDUP, ATOMIC CLAIM
+// === V115 — FIX DELIVERY: mcRes FALLBACK WHEN sendDM FAILS ===
+// Changements vs V114:
+//  1. sendDM fail → return mcRes(response) au lieu de mcEmpty() → ManyChat délivre dans le flow
+//  2. sendDM success → return mcEmpty() pour éviter doublon
+//  3. Fix la fenêtre 24h: ManyChat ne compte PAS les External Requests comme interactions
+//  4. REMOVED message_tag 'HUMAN_AGENT' from sendDM() (V114)
+// Conservé: savePending DEDUP, ATOMIC CLAIM, delivery_status tracking
 // Conservé de V108/V109:
 //  - responded_at, anti-doublon 45s/90s, pre-send lock 30s, __YIELDED__
 // Conservé tel quel:
@@ -2099,23 +2099,26 @@ export default async function handler(req: Request): Promise<Response> {
         console.log(`[V110] 🛑 SEND DEDUP (distress): autre process a déjà envoyé dans les 10s → SKIP sendDM`);
         return mcEmpty();
       }
-      // V112: ZERO-MCRES + delivery tracking DB
+      // V115: TRY sendDM → if fail, fallback to mcRes (ManyChat flow delivery)
       let dlvStatus = 'no_sub';
+      let sendDmOk = false;
       if (subscriberId) {
-        console.log(`[V112] DISTRESS sendDM: sub=${subscriberId}, responseLen=${response.length}`);
-        const sent = await sendDM(subscriberId, response);
-        dlvStatus = sent ? 'sent' : 'failed';
-        if (!sent) { console.error(`[V112] ⚠️ DISTRESS sendDM FAILED → setField backup`); await setField(subscriberId, response); }
+        console.log(`[V115] DISTRESS sendDM: sub=${subscriberId}, responseLen=${response.length}`);
+        sendDmOk = await sendDM(subscriberId, response);
+        dlvStatus = sendDmOk ? 'sent' : 'failed';
+        if (!sendDmOk) { console.log(`[V115] DISTRESS sendDM failed → mcRes fallback`); }
       } else {
-        console.error(`[V112] 🚨 DISTRESS: subscriberId is NULL — cannot send DM! userId=${userId}`);
+        console.error(`[V115] DISTRESS: subscriberId is NULL — mcRes fallback`);
       }
       // V113: Write delivery status to ALL claimed rows
       if (claimData && claimData.length > 0) {
         const claimedIds = claimData.map((r: any) => r.id);
-        await supabase.from('conversation_history').update({ delivery_status: `distress:${dlvStatus}:sub=${subscriberId||'null'}` }).in('id', claimedIds);
-        console.log(`[V113] DISTRESS delivery_status written to ${claimedIds.length} rows: ${dlvStatus}`);
+        const statusLabel = sendDmOk ? `distress:sent:sub=${subscriberId}` : `distress:mcres:sub=${subscriberId||'null'}`;
+        await supabase.from('conversation_history').update({ delivery_status: statusLabel }).in('id', claimedIds);
+        console.log(`[V115] DISTRESS delivery_status: ${statusLabel} (${claimedIds.length} rows)`);
       }
-      return mcEmpty();
+      // V115: sendDM OK → mcEmpty (avoid double). sendDM FAIL → mcRes (ManyChat delivers)
+      return sendDmOk ? mcEmpty() : mcRes(response);
     }
 
     const funnel = getFunnelState(history);
@@ -2635,24 +2638,27 @@ export default async function handler(req: Request): Promise<Response> {
       return mcEmpty();
     }
 
-    // V112: ZERO-MCRES + delivery tracking DB
+    // V115: TRY sendDM → if fail, fallback to mcRes (ManyChat flow delivery)
     let dlvStatus = 'no_sub';
+    let sendDmOk = false;
     if (subscriberId) {
-      console.log(`[V112] NORMAL sendDM: sub=${subscriberId}, responseLen=${response.length}`);
-      const sent = await sendDM(subscriberId, response);
-      dlvStatus = sent ? 'sent' : 'failed';
-      if (!sent) { console.error(`[V112] ⚠️ NORMAL sendDM FAILED → setField backup. sub=${subscriberId}`); await setField(subscriberId, response); }
-      else { console.log(`[V112] ✅ DM delivered to sub=${subscriberId}`); }
+      console.log(`[V115] NORMAL sendDM: sub=${subscriberId}, responseLen=${response.length}`);
+      sendDmOk = await sendDM(subscriberId, response);
+      dlvStatus = sendDmOk ? 'sent' : 'failed';
+      if (sendDmOk) { console.log(`[V115] ✅ DM delivered via API to sub=${subscriberId}`); }
+      else { console.log(`[V115] sendDM failed → mcRes fallback for sub=${subscriberId}`); }
     } else {
-      console.error(`[V112] 🚨 subscriberId is NULL — cannot send DM! userId=${userId}`);
+      console.error(`[V115] subscriberId is NULL — mcRes fallback`);
     }
-    // V113: Write delivery status to ALL claimed rows (not just first)
+    // V115: Write delivery status to ALL claimed rows
     if (claimData && claimData.length > 0) {
       const claimedIds = claimData.map((r: any) => r.id);
-      await supabase.from('conversation_history').update({ delivery_status: `normal:${dlvStatus}:sub=${subscriberId||'null'}` }).in('id', claimedIds);
-      console.log(`[V113] delivery_status written to ${claimedIds.length} rows: ${dlvStatus}`);
+      const statusLabel = sendDmOk ? `normal:sent:sub=${subscriberId}` : `normal:mcres:sub=${subscriberId||'null'}`;
+      await supabase.from('conversation_history').update({ delivery_status: statusLabel }).in('id', claimedIds);
+      console.log(`[V115] delivery_status: ${statusLabel} (${claimedIds.length} rows)`);
     }
-    return mcEmpty();
+    // V115: sendDM OK → mcEmpty (avoid double). sendDM FAIL → mcRes (ManyChat delivers)
+    return sendDmOk ? mcEmpty() : mcRes(response);
   } catch (e: any) {
     console.error('[V110] Error:', e.message);
     // V110: même en erreur, JAMAIS mcRes() — retourner vide pour éviter doublon
