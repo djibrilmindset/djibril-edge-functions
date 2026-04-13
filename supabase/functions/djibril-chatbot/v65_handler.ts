@@ -605,7 +605,7 @@ function isTooSimilar(response: string, recentBotResponses: string[]): boolean {
   const responseFirstWord = getFirstWord(response);
   // V84: CORE WORD CHECK — extraire le mot principal et bloquer si déjà utilisé
   // Attrape "Développe" vs "Développe frérot" vs "développe un peu"
-  const coreWord = respLower.replace(/\b(frérot|frère|frero|un peu|moi|ça|là|ok|ah|genre|en vrai|du coup|bah)\b/gi, '').trim().split(/\s+/)[0] || '';
+  const coreWord = respLower.replace(/\b(frérot|frère|frero|un peu|moi|ça|là|ok|ah|ouais|ouai|genre|en vrai|du coup|bah|vas-y|wsh|tiens|bon|hein|quoi|nan)\b/gi, '').trim().split(/\s+/)[0] || '';
   // V79: EXACT MATCH CHECK — priorité absolue, même pour les réponses courtes
   for (const recent of recentBotResponses) {
     if (recent.toLowerCase().trim() === respLower) {
@@ -617,7 +617,7 @@ function isTooSimilar(response: string, recentBotResponses: string[]): boolean {
   const wordCount = respLower.split(/\s+/).length;
   if (wordCount <= 5 && coreWord.length > 3) {
     for (const recent of recentBotResponses) {
-      const recentCore = recent.toLowerCase().replace(/\b(frérot|frère|frero|un peu|moi|ça|là|ok|ah|genre|en vrai|du coup|bah)\b/gi, '').trim().split(/\s+/)[0] || '';
+      const recentCore = recent.toLowerCase().replace(/\b(frérot|frère|frero|un peu|moi|ça|là|ok|ah|ouais|ouai|genre|en vrai|du coup|bah|vas-y|wsh|tiens|bon|hein|quoi|nan)\b/gi, '').trim().split(/\s+/)[0] || '';
       if (recentCore === coreWord) {
         console.log(`[V84] 🚫 SHORT REPEAT bloqué: core="${coreWord}" dans "${response.substring(0, 50)}"`);
         return true;
