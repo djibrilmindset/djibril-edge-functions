@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V83.2 — MISTRAL LARGE 3 + FIX DÉTRESSE REGEX + DEPLOY DIRECT ===
+// === V84 — FIX RÉPÉTITION + ESQUIVE + NAME GUARD ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -603,11 +603,25 @@ function isTooSimilar(response: string, recentBotResponses: string[]): boolean {
   const respLower = response.toLowerCase().trim();
   const responseStart = getStartSignature(response);
   const responseFirstWord = getFirstWord(response);
+  // V84: CORE WORD CHECK — extraire le mot principal et bloquer si déjà utilisé
+  // Attrape "Développe" vs "Développe frérot" vs "développe un peu"
+  const coreWord = respLower.replace(/\b(frérot|frère|frero|un peu|moi|ça|là|ok|ah|genre|en vrai|du coup|bah)\b/gi, '').trim().split(/\s+/)[0] || '';
   // V79: EXACT MATCH CHECK — priorité absolue, même pour les réponses courtes
   for (const recent of recentBotResponses) {
     if (recent.toLowerCase().trim() === respLower) {
       console.log(`[V79] 🚫 EXACT MATCH bloqué: "${response.substring(0, 50)}"`);
       return true;
+    }
+  }
+  // V84: SHORT MSG CHECK — pour les réponses <5 mots, check si le mot-clé principal est identique
+  const wordCount = respLower.split(/\s+/).length;
+  if (wordCount <= 5 && coreWord.length > 3) {
+    for (const recent of recentBotResponses) {
+      const recentCore = recent.toLowerCase().replace(/\b(frérot|frère|frero|un peu|moi|ça|là|ok|ah|genre|en vrai|du coup|bah)\b/gi, '').trim().split(/\s+/)[0] || '';
+      if (recentCore === coreWord) {
+        console.log(`[V84] 🚫 SHORT REPEAT bloqué: core="${coreWord}" dans "${response.substring(0, 50)}"`);
+        return true;
+      }
     }
   }
   // V70.2: Compter combien de msgs récents commencent par le MÊME premier mot
@@ -1270,6 +1284,9 @@ RÈGLES ABSOLUES:
 8. BARBER: si c'est SON métier → creuse sa douleur dedans. Sinon → JAMAIS mentionner.
 9. OUVERTURES VARIÉES: jamais "Merci de partager/Intéressant/Courageux". Varie: "Ah ouais/Clairement/J'capte/Mmh/Ok". "Yo" max 1/5 msgs.
 10. "DÉLIRE"/"TON DÉLIRE": UNIQUEMENT quand il parle d'un PROJET/PASSION. JAMAIS sur un simple salut ou une question sérieuse.
+11. ANTI-ESQUIVE: Si il demande "tu proposes quoi/c'est quoi/tu fais quoi" → RÉPONDS DIRECT: "J'accompagne des gens à lancer un truc smart qui rapporte" ou similaire + lien valeur si dispo. JAMAIS esquiver avec une contre-question.
+12. ZÉRO RÉPÉTITION SÉMANTIQUE: Relis le bloc ⛔ DÉJÀ DIT. Si tu as déjà dit la MÊME IDÉE en d'autres mots → DIS AUTRE CHOSE. Exemple: si t'as dit "trouver un truc qui te plaît et qui paie" → INTERDIT de dire "l'équilibre entre kiffer et gagner". Change COMPLÈTEMENT d'angle.
+13. ZÉRO "Développe/Raconte/Dis-moi" en boucle. Si t'as déjà dit un truc court comme "Développe" ou "Raconte" → la prochaine fois rebondis sur un DÉTAIL de ce qu'il a dit.
 
 SKILLS (activation auto par phase):
 - LABELING: "T'as l'air bloqué", "Ça te saoule" → 3-5 mots oral. JAMAIS "je comprends que tu ressentes". [CREUSER/RÉVÉLER/QUALIFIER]
@@ -1280,7 +1297,7 @@ SKILLS (activation auto par phase):
 - QUAL DOULEUR: intensité + durée + tentatives passées = qualifié. PAS le budget. [QUALIFIER/RÉVÉLER]
 
 STYLE: j'capte/t'as/y'a/j'sais/en vrai/du coup/genre/frérot. "mdrr" (2 R). Ponctuation: , et ? uniquement. Zéro . ! ... émoji. Direct, tu commandes. JAMAIS: coach motivationnel ("sur la bonne voie/chapeau/bravo/à ta portée/je respecte"). JAMAIS: faux-empathique ("j'comprends que tu/j'te juge pas/c'est normal de"). Varie tes expressions.
-INTERDIT: "Adam", termes internes, markdown, prix offre, Pellabère, Cialdini, récipient, encre, dopamine, funnel.
+INTERDIT: "Adam", "Djibril" (c'est TOI pas le prospect), termes internes, markdown, prix offre, Pellabère, Cialdini, récipient, encre, dopamine, funnel.
 ${salamRule}
 ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN: ${LINK_VALEUR}` : funnel.funnelStep === 'NEED_LANDING' ? `LIEN: ${LINK_LANDING}` : `LIEN: ${CALENDLY_LINK}`}
 ${pending.hasPending ? `"${pending.question.substring(0, 40)}" déjà posé. ${pending.turnsWaiting >= 2 ? 'Abandonne.' : 'Repose pas.'}` : ''}
@@ -1870,6 +1887,11 @@ export default async function handler(req: Request): Promise<Response> {
         }
       }
       if (!response) response = null;
+    }
+    // V84: NAME GUARD — "djibril" c'est le BOT, JAMAIS l'utiliser comme prénom du prospect
+    if (response && /\bdjibril\b/i.test(response)) {
+      response = response.replace(/\b(djibril)\b/gi, 'frérot').replace(/frérot,?\s*frérot/gi, 'frérot');
+      console.log('[V84] NAME GUARD: "djibril" remplacé par "frérot"');
     }
     // SÉCURITÉ FUNNEL: strip liens interdits selon le step actuel
     if (funnel.funnelStep === 'NEED_VALEUR') {
