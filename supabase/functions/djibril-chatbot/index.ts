@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V93 — NAME-BLACKLIST + OPENER-STRIP + EMPATHIC-FALLBACKS + NATURAL-TONE ===
+// === V94 — FINAL-CLEAN + EMOJI-KILL + QUALITY-FLOOR ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -2324,6 +2324,24 @@ export default async function handler(req: Request): Promise<Response> {
     }
     // V92: ANTI-BOUCLE STRUCTURELLE SUPPRIMÉE — les statements forcés étaient HORS CONTEXTE
     // Le problème sera géré par Mistral + frequency_penalty + les handlers directs V92
+
+    // V94: FINAL CLEAN — strip emoji + ponctuation bizarre sur TOUTE réponse avant envoi
+    // Sécurité ultime — aucun emoji ne doit jamais atteindre le prospect
+    if (response) {
+      // Protéger les URLs
+      const _finalUrls: string[] = [];
+      response = response.replace(/https?:\/\/[^\s]+/g, (url) => { _finalUrls.push(url); return `__FURL${_finalUrls.length - 1}__`; });
+      // Strip TOUS les emojis (même ceux qui ont survécu aux filtres précédents)
+      response = response.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '');
+      // Strip ! et ... (pas naturel en DM)
+      response = response.replace(/!/g, '').replace(/\.{2,}/g, ',');
+      // Restaurer les URLs
+      response = response.replace(/__FURL(\d+)__/g, (_, i) => _finalUrls[parseInt(i)]);
+      // Nettoyer espaces
+      response = response.replace(/\s{2,}/g, ' ').trim();
+      if (!response) response = "Vas-y dis-moi";
+      console.log(`[V94] FINAL CLEAN done, ${response.length}c`);
+    }
 
     let sent = false;
     if (subscriberId) { sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
