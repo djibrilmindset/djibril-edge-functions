@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V90 — ANTI-REPEAT-TOTAL + FREQ-PENALTY + HISTORY-FILTER + FALLBACK-DIVERSIFY ===
+// === V91 — GREETING-FIX + OK-ET-APRES-KILL + CONTEXTUAL-FALLBACK + ANTI-REPEAT-TOTAL ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -820,6 +820,9 @@ function detectPattern(msg: string): string | null {
   if (/giphy|sticker|gif/.test(m)) return 'sticker_gif';
   if (/tu\s*bug|t.?as\s*bug|ca\s*bug|ça\s*bug/.test(m)) return 'tu_bug';
   if (/^(salut|salam|hey|yo|wesh|wsh|hello|bonjour|bonsoir|cc|coucou)[\s!?.]*$/i.test(m)) return 'salut_hello';
+  // V91: "Cv", "Cv boss", "Cv le boss", "Ça va", "Sa va" = SALUT — pas reconnu avant
+  if (/^(cv|ça va|sa va|ca va)[\s!?.]*$/i.test(m)) return 'salut_hello';
+  if (/^(cv|ça va|sa va|ca va)\s+(boss|le boss|frérot|fr[eé]rot|mon (fr[èe]re|reuf)|chef|bro|gros|mon gars?)[\s!?.]*$/i.test(m)) return 'salut_hello';
   if (/^(wesh|wsh)\s*(fr[eé]rot|mon\s*fr[èe]re)?[\s!?.]*$/i.test(m)) return 'wesh_frero';
   if (/en savoir plus|savoir plus|je veux savoir/.test(m)) return 'en_savoir_plus';
   if (/j.?aime.{0,10}(contenu|vid[éé]o|post|page)|ton contenu|tes vid[ée]o/.test(m)) return 'jaime_contenu';
@@ -1424,7 +1427,7 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory, 
   const msgs: any[] = [];
   // V90: FILTRER l'historique pollué — ne PAS envoyer les réponses robotiques à Mistral
   // Sinon Mistral apprend que "Clairement" / "Développe" / réponses 1-mot sont OK
-  const TOXIC_RESPONSES = /^(clairement|d[eé]veloppe|raconte|int[eé]ressant|grave|exactement|carr[eé]ment|ok j.?capte|c.est.[aà].dire|dis.moi|j.?t.?[eé]coute|vas.y|mmh vas.y|ah ouais raconte|ok et apr[eè]s|genre comment [çc]a)[.!?,\s]*$/i;
+  const TOXIC_RESPONSES = /^(clairement|d[eé]veloppe|raconte|int[eé]ressant|grave|exactement|carr[eé]ment|ok j.?capte|c.est.[aà].dire|dis.moi|j.?t.?[eé]coute|vas.y|mmh vas.y|ah ouais raconte|ok et apr[eè]s|genre comment [çc]a|et du coup|et apr[eè]s|ok|ouais|ah ok|je vois|je comprends?|effectivement|totalement|absolument)[.!?,\s]*$/i;
   const TOXIC_SHORT = /^.{1,15}$/; // Réponses < 15 chars souvent robotiques
   for (const h of history.slice(-20)) {
     if (h.user_message) msgs.push({ role: 'user', content: h.user_message });
@@ -1941,6 +1944,41 @@ export default async function handler(req: Request): Promise<Response> {
         console.log(`[V69] MEDIA DEFLECT (${pattern}) — traitement échoué, fallback`);
       }
     }
+    // V91: SALUT_HELLO → réponse directe contextuelle, JAMAIS un fallback random
+    if (pattern === 'salut_hello' || pattern === 'wesh_frero') {
+      const salamDone = hasSalamBeenSaid(history);
+      const greetPool = salamDone ? [
+        "Tranquille et toi, quoi de neuf ?",
+        "Ça va bien et toi ? T'en es où ?",
+        "Bien et toi frérot, tu gères ?",
+        "Trkl, du coup t'en es où ?",
+        "Ça va, tu voulais me dire quoi ?",
+        "Bien là, vas-y dis-moi",
+        "Tranquille frérot, quoi de beau ?",
+        "Ça roule, tu voulais quoi ?",
+      ] : [
+        "Salam aleykoum, ça va ? Tu voulais me dire quoi ?",
+        "Salam frérot, bien ou quoi ? Vas-y dis-moi",
+        "Salam, ça va toi ? T'en es où ?",
+      ];
+      const usedGreets = recentBotMsgs.filter(r => greetPool.some(g => calculateSimilarity(r, g) > 0.3));
+      const availGreets = greetPool.filter(g => !usedGreets.some(u => calculateSimilarity(g, u) > 0.3));
+      response = (availGreets.length ? availGreets : greetPool)[Date.now() % (availGreets.length || greetPool.length)];
+      console.log(`[V91] 👋 GREETING DIRECT: "${response}"`);
+    }
+    // V91: TU_BUG → le prospect dit que ça bug → esquiver naturellement
+    if (pattern === 'tu_bug') {
+      const bugPool = [
+        "Mdr non j'avais un truc à gérer, bref du coup tu disais quoi ?",
+        "Ah désolé j'étais entre deux trucs, vas-y dis-moi",
+        "Lol j'étais occupé, bref tu voulais dire quoi ?",
+        "Mon tel a merdé, du coup tu en étais où ?",
+      ];
+      const usedBugs = recentBotMsgs.filter(r => bugPool.some(b => calculateSimilarity(r, b) > 0.3));
+      const availBugs = bugPool.filter(b => !usedBugs.some(u => calculateSimilarity(b, u) > 0.3));
+      response = (availBugs.length ? availBugs : bugPool)[Date.now() % (availBugs.length || bugPool.length)];
+      console.log('[V91] 🐛 TU_BUG DEFLECT');
+    }
     if (pattern === 'suspect_bot') {
       // Le prospect demande si c'est un bot — esquiver naturellement
       // V72: deflects IA ultra courts et détachés — un vrai mec s'en fout
@@ -2099,6 +2137,12 @@ export default async function handler(req: Request): Promise<Response> {
         /^ouais[.!?,\s]*$/i, // V90
         /^trop bien[.!?,\s]*$/i, // V90
         /^ah ok[.!?,\s]*$/i, // V90
+        /^ok et apr[eè]s[.!?,\s]*$/i, // V91: KILLER — "Ok et après ?" en boucle
+        /^et apr[eè]s[.!?,\s]*$/i, // V91
+        /^et du coup[.!?,\s]*$/i, // V91
+        /^genre comment [çc]a[.!?,\s]*$/i, // V91
+        /^ah ouais raconte[.!?,\s]*$/i, // V91
+        /^dis.moi tout[.!?,\s]*$/i, // V91
       ];
       const isBlacklisted = blacklist.some(bl => bl.test(response.trim()));
 
