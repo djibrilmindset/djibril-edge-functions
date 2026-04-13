@@ -1,12 +1,13 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V117 — FIX ROBOT PATTERNS + ANSWER QUESTIONS + ZERO BARBER ===
-// Changements vs V116:
-//  1. System prompt: banned 3 robotic templates (Tu parles de/Quand tu dis/ça veut dire quoi concrètement)
-//  2. System prompt: ANSWER QUESTIONS FIRST rule strengthened — ANY question, not just prix/programme
-//  3. System prompt: ZÉRO BARBER/COIFFURE in Djibril identity — NEVER mention
-//  4. System prompt: banned "concrètement" overuse, added variety examples
-//  5. DEBOUNCE 45s + SEND DEDUP 60s conservé (V116)
+// === V180 — FAST RESPONSE: mcRes ONLY (sendDM impossible sur IG) ===
+// Changements vs V117:
+//  1. DEBOUNCE 45s → 5s (total response <15s pour que ManyChat reçoive mcRes)
+//  2. sendDM SUPPRIMÉ du chemin normal + distress → toujours mcRes direct
+//  3. SEND DEDUP 60s → 10s (adapté au debounce court)
+//  4. Raison: sendDM via ManyChat API échoue TOUJOURS sur IG (24h window never refreshed
+//     par External Request callbacks, et HUMAN_AGENT tag non supporté sur IG)
+//  5. mcRes = seule voie de livraison fiable (flow response)
 // Conservé: savePending DEDUP, ATOMIC CLAIM, delivery_status tracking
 // Conservé de V108/V109:
 //  - responded_at, anti-doublon 45s/90s, pre-send lock 30s, __YIELDED__
@@ -30,7 +31,7 @@ const MODEL = 'mistral-large-2512';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'gpt-4o-mini-transcribe'; // anti-hallucination natif
 const MAX_TOKENS = 130;
-const DEBOUNCE_MS = 45000; // V116: 45s (was 20s) — fix duplicates sur messages rapprochés
+const DEBOUNCE_MS = 5000; // V180: 5s (was 45s) — fast response pour mcRes delivery
 
 let _anthropicKey: string | null = null;
 let _mistralKey: string | null = null; // conservé pour Pixtral (images)
@@ -405,8 +406,8 @@ async function getPendingMessages(platform: string, userId: string, afterTimesta
 
 async function savePending(platform: string, userId: string, msg: string): Promise<{ id?: string; created_at: string }> {
   try {
-    // V113: DEDUP — si un __PENDING__ existe déjà pour ce user dans les 30s, skip insert
-    const recentCutoff = new Date(Date.now() - 30000).toISOString();
+    // V180: DEDUP — si un __PENDING__ existe déjà pour ce user dans les 10s, skip insert
+    const recentCutoff = new Date(Date.now() - 10000).toISOString();
     const { data: existing } = await supabase.from('conversation_history')
       .select('id, created_at')
       .eq('platform', platform).eq('user_id', userId).eq('bot_response', '__PENDING__')
@@ -1924,8 +1925,8 @@ export default async function handler(req: Request): Promise<Response> {
     if (recentByRespondedAt && recentByRespondedAt.length > 0) {
       const realResponseTime = new Date(recentByRespondedAt[0].responded_at).getTime();
       const secsSinceRealResponse = (Date.now() - realResponseTime) / 1000;
-      // V107: Si le bot a VRAIMENT répondu il y a moins de 45s → YIELD (couvre debounce + génération)
-      if (secsSinceRealResponse < 45) {
+      // V180: Si le bot a VRAIMENT répondu il y a moins de 10s → YIELD (debounce 5s + marge)
+      if (secsSinceRealResponse < 10) {
         console.log(`[V107] 🛑 ANTI-DOUBLON (responded_at): bot a répondu il y a ${secsSinceRealResponse.toFixed(1)}s réels → YIELD`);
         return mcEmpty();
       }
@@ -1969,20 +1970,8 @@ export default async function handler(req: Request): Promise<Response> {
       return mcEmpty(); // Yield to let the last message in the batch handle all of them
     }
 
-    // DOUBLE-CHECK: attendre 5s de plus et revérifier (catch les fragments lents)
-    await new Promise(resolve => setTimeout(resolve, 5000));
-    const doubleCheck = await getPendingMessages(platform, userId, savedAt);
-    if (doubleCheck.length > 0) {
-      console.log(`[V73] DEBOUNCE DOUBLE-CHECK YIELD: ${doubleCheck.length} late fragment(s)`);
-      return mcEmpty();
-    }
-    // V73: TRIPLE-CHECK pour les rafales longues (mecs qui envoient 5+ messages)
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    const tripleCheck = await getPendingMessages(platform, userId, savedAt);
-    if (tripleCheck.length > 0) {
-      console.log(`[V73] DEBOUNCE TRIPLE-CHECK YIELD: ${tripleCheck.length} ultra-late fragment(s)`);
-      return mcEmpty();
-    }
+    // V180: REMOVED double-check (5s) + triple-check (3s) — debounce 5s suffit
+    // Avec 5s de debounce, 99% des rafales sont déjà capturées
 
     // V107: VERROU POST-DEBOUNCE — utilise responded_at pour détecter si un AUTRE process a répondu pendant notre attente
     // Check 1: responded_at (précis)
@@ -1998,8 +1987,8 @@ export default async function handler(req: Request): Promise<Response> {
     if (postDebounceRespondedAt && postDebounceRespondedAt.length > 0) {
       const realTime = new Date(postDebounceRespondedAt[0].responded_at).getTime();
       const secsSinceReal = (Date.now() - realTime) / 1000;
-      // V107: Si un process a répondu il y a < 90s (couvre debounce 28s + génération 15s + marge) → YIELD
-      if (secsSinceReal < 90) {
+      // V180: Si un process a répondu il y a < 20s (debounce 5s + génération 10s + marge) → YIELD
+      if (secsSinceReal < 20) {
         console.log(`[V107] 🛑 POST-DEBOUNCE (responded_at): autre process a répondu il y a ${secsSinceReal.toFixed(1)}s réels → YIELD`);
         return mcEmpty();
       }
@@ -2016,7 +2005,7 @@ export default async function handler(req: Request): Promise<Response> {
     if (postDebounceCheck && postDebounceCheck.length > 0) {
       const postDebounceTime = new Date(postDebounceCheck[0].created_at).getTime();
       const secsSincePostDebounce = (Date.now() - postDebounceTime) / 1000;
-      if (secsSincePostDebounce < 60) {
+      if (secsSincePostDebounce < 20) { // V180: 20s (was 60s)
         console.log(`[V107] 🛑 POST-DEBOUNCE (created_at fallback): ${secsSincePostDebounce.toFixed(1)}s → YIELD`);
         return mcEmpty();
       }
@@ -2101,40 +2090,28 @@ export default async function handler(req: Request): Promise<Response> {
         return mcEmpty();
       }
       console.log(`[V110] ✅ ATOMIC CLAIM (distress): ${claimData.length} row(s) claimed`);
-      // V116: SEND DEDUP — vérifier qu'aucun autre process n'a envoyé dans les 60 dernières secondes
+      // V180: SEND DEDUP distress — 10s window
       const { data: distressDedup } = await supabase.from('conversation_history')
         .select('id, responded_at')
         .eq('user_id', userId)
         .neq('bot_response', '__PENDING__').neq('bot_response', '__YIELDED__')
         .neq('bot_response', '__ADMIN_TAKEOVER__').neq('bot_response', '__OUTBOUND__')
         .not('responded_at', 'is', null)
-        .gte('responded_at', new Date(Date.now() - 60000).toISOString())
-        .neq('id', claimData[0]?.id) // exclure notre propre claim
+        .gte('responded_at', new Date(Date.now() - 10000).toISOString())
+        .neq('id', claimData[0]?.id)
         .limit(1);
       if (distressDedup && distressDedup.length > 0) {
-        console.log(`[V116] 🛑 SEND DEDUP (distress): autre process a déjà envoyé dans les 60s → SKIP sendDM`);
+        console.log(`[V180] 🛑 SEND DEDUP (distress): autre process a envoyé dans les 10s → SKIP`);
         return mcEmpty();
       }
-      // V115: TRY sendDM → if fail, fallback to mcRes (ManyChat flow delivery)
-      let dlvStatus = 'no_sub';
-      let sendDmOk = false;
-      if (subscriberId) {
-        console.log(`[V115] DISTRESS sendDM: sub=${subscriberId}, responseLen=${response.length}`);
-        sendDmOk = await sendDM(subscriberId, response);
-        dlvStatus = sendDmOk ? 'sent' : 'failed';
-        if (!sendDmOk) { console.log(`[V115] DISTRESS sendDM failed → mcRes fallback`); }
-      } else {
-        console.error(`[V115] DISTRESS: subscriberId is NULL — mcRes fallback`);
-      }
-      // V113: Write delivery status to ALL claimed rows
+      // V180: mcRes DIRECT pour distress (sendDM supprimé — impossible sur IG)
       if (claimData && claimData.length > 0) {
         const claimedIds = claimData.map((r: any) => r.id);
-        const statusLabel = sendDmOk ? `distress:sent:sub=${subscriberId}` : `distress:mcres:sub=${subscriberId||'null'}`;
+        const statusLabel = `distress:mcres:sub=${subscriberId||'null'}`;
         await supabase.from('conversation_history').update({ delivery_status: statusLabel }).in('id', claimedIds);
-        console.log(`[V115] DISTRESS delivery_status: ${statusLabel} (${claimedIds.length} rows)`);
+        console.log(`[V180] ✅ DISTRESS delivery via mcRes: ${statusLabel} (${claimedIds.length} rows)`);
       }
-      // V115: sendDM OK → mcEmpty (avoid double). sendDM FAIL → mcRes (ManyChat delivers)
-      return sendDmOk ? mcEmpty() : mcRes(response);
+      return mcRes(response);
     }
 
     const funnel = getFunnelState(history);
@@ -2638,43 +2615,30 @@ export default async function handler(req: Request): Promise<Response> {
     }
     console.log(`[V110] ✅ ATOMIC CLAIM: ${claimData.length} row(s) claimed — envoi DM`);
 
-    // V116: SEND DEDUP — dernier filet avant sendDM()
-    // Si un AUTRE process a déjà envoyé dans les 60 dernières secondes → SKIP
+    // V180: SEND DEDUP — 10s window (adapté au debounce 5s)
     const { data: sendDedup } = await supabase.from('conversation_history')
       .select('id, responded_at')
       .eq('user_id', userId)
       .neq('bot_response', '__PENDING__').neq('bot_response', '__YIELDED__')
       .neq('bot_response', '__ADMIN_TAKEOVER__').neq('bot_response', '__OUTBOUND__')
       .not('responded_at', 'is', null)
-      .gte('responded_at', new Date(Date.now() - 60000).toISOString())
-      .neq('id', claimData[0]?.id) // exclure notre propre claim
+      .gte('responded_at', new Date(Date.now() - 10000).toISOString())
+      .neq('id', claimData[0]?.id)
       .limit(1);
     if (sendDedup && sendDedup.length > 0) {
-      console.log(`[V116] 🛑 SEND DEDUP: autre process a envoyé dans les 60s → SKIP sendDM`);
+      console.log(`[V180] 🛑 SEND DEDUP: autre process a envoyé dans les 10s → SKIP`);
       return mcEmpty();
     }
 
-    // V115: TRY sendDM → if fail, fallback to mcRes (ManyChat flow delivery)
-    let dlvStatus = 'no_sub';
-    let sendDmOk = false;
-    if (subscriberId) {
-      console.log(`[V115] NORMAL sendDM: sub=${subscriberId}, responseLen=${response.length}`);
-      sendDmOk = await sendDM(subscriberId, response);
-      dlvStatus = sendDmOk ? 'sent' : 'failed';
-      if (sendDmOk) { console.log(`[V115] ✅ DM delivered via API to sub=${subscriberId}`); }
-      else { console.log(`[V115] sendDM failed → mcRes fallback for sub=${subscriberId}`); }
-    } else {
-      console.error(`[V115] subscriberId is NULL — mcRes fallback`);
-    }
-    // V115: Write delivery status to ALL claimed rows
+    // V180: mcRes DIRECT — sendDM supprimé (impossible sur IG: 24h window + no HUMAN_AGENT tag)
+    // mcRes = réponse au flow ManyChat = seule voie de livraison fiable
     if (claimData && claimData.length > 0) {
       const claimedIds = claimData.map((r: any) => r.id);
-      const statusLabel = sendDmOk ? `normal:sent:sub=${subscriberId}` : `normal:mcres:sub=${subscriberId||'null'}`;
+      const statusLabel = `normal:mcres:sub=${subscriberId||'null'}`;
       await supabase.from('conversation_history').update({ delivery_status: statusLabel }).in('id', claimedIds);
-      console.log(`[V115] delivery_status: ${statusLabel} (${claimedIds.length} rows)`);
+      console.log(`[V180] ✅ delivery via mcRes: ${statusLabel} (${claimedIds.length} rows, ${response.length} chars)`);
     }
-    // V115: sendDM OK → mcEmpty (avoid double). sendDM FAIL → mcRes (ManyChat delivers)
-    return sendDmOk ? mcEmpty() : mcRes(response);
+    return mcRes(response);
   } catch (e: any) {
     console.error('[V110] Error:', e.message);
     // V110: même en erreur, JAMAIS mcRes() — retourner vide pour éviter doublon
