@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V88 — CLEAN URL-SAFE + TRONCATURE ALIGNÉE + DB PURGE CLAUDE + SKIP_ GÉNÉRIQUE ===
+// === V89 — URL-FIX-ORDER + ANTI-BIO + ANTI-IA-12 + FALLBACKS-SAFE + SEMANTIC-REPEAT + RETRY-BACKOFF + PRIX-DIRECT ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -599,10 +599,44 @@ function calculateSimilarity(text1: string, text2: string): number {
   const startPenalty = (start1.length > 5 && start1 === start2) ? 0.15 : 0;
   return Math.max(kwScore, bgScore) + startPenalty;
 }
+// V89: SEMANTIC GROUPS — questions qui disent la même chose avec des mots différents
+const SEMANTIC_GROUPS: RegExp[][] = [
+  // Groupe "qu'est-ce qui te bloque"
+  [/qu.est.ce qui (te |t.)(bloque|emp[eê]che|freine|retient)/i, /c.est quoi.{0,10}(blocage|frein|mur)/i, /qu.est.ce qui te (stop|arr[eê]te)/i, /le truc qui (te |t.)(bloque|freine)/i],
+  // Groupe "développe/raconte/explique"
+  [/d[eé]veloppe/i, /raconte/i, /explique/i, /dis.m.en plus/i, /d[eé]taille/i],
+  // Groupe "c'est-à-dire"
+  [/c.est.[aà].dire/i, /tu veux dire quoi/i, /ça veut dire quoi/i, /comment [çc]a/i],
+  // Groupe "t'en es où"
+  [/t.en es o[uù]/i, /o[uù] t.en es/i, /t.es o[uù] (l[aà]|concrètement|dans)/i],
+  // Groupe "ça fait combien de temps"
+  [/[çc]a fait combien de temps/i, /depuis combien de temps/i, /depuis quand/i, /[çc]a dure depuis/i],
+  // Groupe "t'as déjà essayé"
+  [/t.as (d[eé]j[aà] |)(essay|tent|test)/i, /t.as fait quoi pour/i, /t.as (déjà |)cherché/i],
+];
+
+function getSemanticGroup(text: string): number {
+  const t = text.toLowerCase();
+  for (let i = 0; i < SEMANTIC_GROUPS.length; i++) {
+    if (SEMANTIC_GROUPS[i].some(p => p.test(t))) return i;
+  }
+  return -1;
+}
+
 function isTooSimilar(response: string, recentBotResponses: string[]): boolean {
   const respLower = response.toLowerCase().trim();
   const responseStart = getStartSignature(response);
   const responseFirstWord = getFirstWord(response);
+  // V89: SEMANTIC GROUP CHECK — même concept = même question, même si mots différents
+  const respGroup = getSemanticGroup(response);
+  if (respGroup >= 0) {
+    for (const recent of recentBotResponses) {
+      if (getSemanticGroup(recent) === respGroup) {
+        console.log(`[V89] 🚫 SEMANTIC REPEAT: group ${respGroup} — "${response.substring(0, 40)}" ~ "${recent.substring(0, 40)}"`);
+        return true;
+      }
+    }
+  }
   // V84: CORE WORD CHECK — extraire le mot principal et bloquer si déjà utilisé
   // Attrape "Développe" vs "Développe frérot" vs "développe un peu"
   const coreWord = respLower.replace(/\b(frérot|frère|frero|un peu|moi|ça|là|ok|ah|ouais|ouai|genre|en vrai|du coup|bah|vas-y|wsh|tiens|bon|hein|quoi|nan)\b/gi, '').trim().split(/\s+/)[0] || '';
@@ -946,6 +980,11 @@ function clean(text: string): string {
   r = r.replace(/c.?est normal de (se méfier|douter|hésiter),?\s*/gi, '');
   r = r.replace(/t.?as raison de (te méfier|douter),?\s*/gi, '');
   r = r.replace(/t.?es (méfiant|sur tes gardes),?\s*/gi, '');
+  // V89 ANTI-LIEN-BIO: strip TOUTE mention "lien en bio" — le lien n'est PAS en bio, c'est factuellement FAUX
+  r = r.replace(/t.?as vu (le |mon )?lien en bio[^.?!,]*/gi, '');
+  r = r.replace(/(regarde|check|va voir|clique|jette un oeil).{0,20}(lien |)en bio[^.?!,]*/gi, '');
+  r = r.replace(/\b(lien|link) (en|dans (ma |la )?)?bio\b[^.?!,]*/gi, '');
+  r = r.replace(/\ben bio\b/gi, '');
   // V81 ANTI-VOCAL: strip TOUTE phrase qui mentionne vocaux/audio — le bot doit JAMAIS en parler
   r = r.replace(/les vocaux (passent|marchent|fonctionnent) pas[^.?!]*/gi, '');
   r = r.replace(/(ça |ca )(veut pas s.?ouvrir|charge pas|passe pas)[^.?!]*/gi, '');
@@ -996,25 +1035,20 @@ function clean(text: string): string {
   r = r.replace(/`([^`]+)`/g, '$1');       // `code` → code
   r = r.replace(/^#+\s*/gm, '');           // # titres → rien
   r = r.replace(/^[-*]\s+/gm, '');         // - listes → rien
+  // V89 FIX CRITIQUE: PROTÉGER LES URLs AVANT TOUTE strip de ponctuation
+  // (V88 bug: ;: strip à ligne 1005 transformait https:// en https,// AVANT la protection)
+  const _urls: string[] = [];
+  r = r.replace(/https?:\/\/[^\s]+/g, (url) => { _urls.push(url); return `__CLEANURL${_urls.length - 1}__`; });
   // ANTI-EMOJI: strip TOUS les émojis — Djibril parle comme un mec, pas un CM
   r = r.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '');
   // ANTI-PONCTUATION BIZARRE: seulement virgules, points d'interrogation et apostrophes autorisés
-  // Strip points d'exclamation
   r = r.replace(/!/g, '');
-  // Strip points-virgules et deux-points
   r = r.replace(/[;:]/g, ',');
-  // Strip parenthèses, crochets, accolades
   r = r.replace(/[(){}\[\]]/g, '');
-  // V88: PROTÉGER LES URLs avant les strip de ponctuation
-  const _urls: string[] = [];
-  r = r.replace(/https?:\/\/[^\s]+/g, (url) => { _urls.push(url); return `__CLEANURL${_urls.length - 1}__`; });
-  // Strip guillemets doubles et chevrons (garder apostrophes)
   r = r.replace(/[""«»"]/g, '');
-  // Strip caractères spéciaux bizarres (garder lettres FR, chiffres, virgule, ?, apostrophe, espace, /)
   r = r.replace(/[^\wàâäéèêëïîôùûüÿçœæÀÂÄÉÈÊËÏÎÔÙÛÜŸÇŒÆ\s,?''\-\/\.]/g, '');
-  // Strip tirets isolés (garder ceux dans les mots comme peut-être)
   r = r.replace(/\s-\s/g, ', ').replace(/\s-$/g, '').replace(/^-\s/g, '');
-  // V88: RESTAURER LES URLs
+  // V89: RESTAURER LES URLs (après TOUTES les strips)
   r = r.replace(/__CLEANURL(\d+)__/g, (_, i) => _urls[parseInt(i)]);
   // Nettoyage espaces multiples après strips
   r = r.replace(/\s{2,}/g, ' ').trim();
@@ -1456,6 +1490,8 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   console.log(`[V69] Phase=${phaseResult.phase} Trust=${phaseResult.trust} Funnel=${phaseResult.funnel.funnelStep} Qual=${phaseResult.qual} #${phaseResult.n + 1}${isStuck ? ' ⚠️STUCK' : ''}${mText ? ` 📎MEDIA=${mType}` : ''}`);
 
   for (let attempt = 0; attempt < 4; attempt++) {
+    // V89: backoff 500ms entre retries (évite de spam Mistral API)
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 500));
     const temp = 0.7 + (attempt * 0.12);
     let retryHint = '';
     if (attempt > 0) retryHint = `\n\n⚠️ TENTATIVE ${attempt + 1}: TA RÉPONSE PRÉCÉDENTE ÉTAIT TROP SIMILAIRE À UN MSG DÉJÀ ENVOYÉ. Tu DOIS changer: 1) les MOTS 2) la STRUCTURE 3) l'IDÉE/ANGLE. Si t'as posé une question avant → cette fois VALIDE ou REFORMULE. Si t'as parlé de blocage → parle d'AUTRE CHOSE. TOTALEMENT DIFFÉRENT.`;
@@ -1505,12 +1541,14 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
       console.error('[V65] API error:', JSON.stringify(result).substring(0, 200));
     } catch (e: any) { console.error('[V65] error:', e.message); }
   }
-  // V79: Fallbacks plus variés + JAMAIS répéter un fallback déjà utilisé
+  // V89: Fallbacks nettoyés — zéro question banned, zéro 1-mot robotique
   const fallbacks = [
-    "Développe frérot", "Genre comment ça exactement ?", "Et du coup t'en es où ?",
-    "Ah ouais raconte", "C'est-à-dire ?", "Vas-y dis-moi tout",
-    "T'en es où concrètement ?", "Ok et après ?", "Qu'est-ce qui te bloque le plus ?",
-    "Ça fait combien de temps ?", "Et t'as fait quoi pour changer ça ?", "Genre quoi par exemple ?"
+    "Genre comment ça exactement ?", "Et du coup t'en es où avec ça ?",
+    "T'en es où concrètement là-dessus ?", "Ok et après, t'as fait quoi ?",
+    "Ça fait combien de temps que t'es dans ce truc ?", "Et t'as fait quoi pour changer ça ?",
+    "Genre quoi par exemple ?", "Ça te pèse depuis longtemps ce truc ?",
+    "Et concrètement ça donne quoi au quotidien ?", "T'as déjà essayé de changer ça ?",
+    "Et le pire dans tout ça c'est quoi ?", "Ça ressemble à quoi une journée type pour toi ?"
   ];
   const usedLower = recentResponses.map(r => r.toLowerCase().trim());
   const available = fallbacks.filter(f => {
@@ -1840,6 +1878,13 @@ export default async function handler(req: Request): Promise<Response> {
         "C'est moi frérot, j'suis sur mon tel",
         "Nan c'est vraiment moi, j'suis rapide c'est tout",
         "Mdrr le bot, non frérot j'suis là",
+        "Lol non c'est moi, j'suis entre deux trucs",
+        "Nan frérot c'est bien moi, j'suis sur mon tel là",
+        "Mdrr t'es sérieux, c'est moi wallah",
+        "Non c'est moi, j'réponds vite c'est tout",
+        "Ptdr le bot, nan c'est djib",
+        "C'est moi frérot, j'suis posé sur mon canap",
+        "Mdrr non j'suis pas un robot, du coup tu disais quoi",
       ];
       const usedAntiIA = recentBotMsgs.filter(r => antiIAResponses.some(a => calculateSimilarity(r, a) > 0.3));
       const availAntiIA = antiIAResponses.filter(a => !usedAntiIA.some(u => calculateSimilarity(a, u) > 0.3));
@@ -1883,6 +1928,12 @@ export default async function handler(req: Request): Promise<Response> {
         "Lol non, du coup tu disais ?",
         "C'est moi frérot, bref",
         "Non c'est bien moi, vas-y continue",
+        "Mdrr non j'suis réel, bref",
+        "C'est moi wallah, j'suis sur mon tel",
+        "Non frérot c'est bien moi, j'tape vite",
+        "Ptdr non, du coup tu voulais dire quoi ?",
+        "Lol c'est moi, j'réponds entre deux trucs",
+        "Non c'est djib, j'suis dispo là",
       ];
       const usedBotDeflects = recentBotMsgs.filter(r => botDeflects.some(d => calculateSimilarity(r, d) > 0.3));
       const availBotDeflects = botDeflects.filter(d => !usedBotDeflects.some(u => calculateSimilarity(d, u) > 0.3));
@@ -1891,7 +1942,17 @@ export default async function handler(req: Request): Promise<Response> {
     }
     if (pattern && !isStuck && !response) {
       console.log(`[V65] PATTERN: ${pattern} | Funnel: ${funnel.funnelStep}`);
-      if (pattern === 'prospect_demande' || pattern === 'demande_doc') {
+      // V89: ask_prix → réponse directe, JAMAIS "lien en bio" (le lien n'est PAS en bio)
+      if (pattern === 'ask_prix') {
+        if (funnel.funnelStep === 'NEED_VALEUR') response = `Avant de parler de ça, regarde ça: ${LINK_VALEUR} — tu vas comprendre le délire`;
+        else if (funnel.funnelStep === 'NEED_LANDING') response = `Tiens regarde: ${LINK_LANDING} — tout est dedans`;
+        else if (funnel.funnelStep === 'NEED_CALENDLY') response = `Le mieux c'est qu'on en parle: ${CALENDLY_LINK}`;
+        else response = `On en parle en appel, c'est plus simple: ${CALENDLY_LINK}`;
+      } else if (pattern === 'ask_offre') {
+        if (funnel.funnelStep === 'NEED_VALEUR') response = `En gros j'accompagne des gens à lancer un business smart, tiens regarde: ${LINK_VALEUR}`;
+        else if (funnel.funnelStep === 'NEED_LANDING') response = `Regarde ça, tout est expliqué: ${LINK_LANDING}`;
+        else response = `J'accompagne des gens à monter un truc rentable, le mieux c'est qu'on en parle: ${CALENDLY_LINK}`;
+      } else if (pattern === 'prospect_demande' || pattern === 'demande_doc') {
         if (funnel.funnelStep === 'NEED_VALEUR') response = `Tiens regarde ça: ${LINK_VALEUR}`;
         else if (funnel.funnelStep === 'NEED_LANDING') response = `Tiens je t'envoie ça: ${LINK_LANDING} — regarde tout. Et si tu reviens motivé, je te ferai une offre que tu pourras pas refuser`;
       } else if (pattern === 'ask_calendly') {
