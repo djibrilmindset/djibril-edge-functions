@@ -1,14 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V110 — ZERO-MCRES ANTI-DOUBLON TOTAL + MISTRAL LARGE 3 ===
-// Changements vs V109:
-//  1. ZERO-MCRES: JAMAIS retourner mcRes(response) — toujours mcEmpty()
-//     - Avant: sendDM() échoue → mcRes(response) → ManyChat AUSSI envoie le msg = DOUBLON
-//     - Maintenant: sendDM() échoue → setField() backup → mcEmpty() → ManyChat envoie RIEN
-//     - Élimine le dual-path qui causait les 3-4x envois
-//  2. SEND DEDUP: avant sendDM(), re-vérifier qu'aucun autre process n'a envoyé dans les 10s
-//     - Filet de sécurité APRÈS atomic claim, AVANT sendDM()
-//  3. ATOMIC CLAIM conservé (V109)
+// === V111 — SENDDM DIAGNOSTIC + RETRY + LOGGING ===
+// Changements vs V110:
+//  1. sendDM() avec LOGGING COMPLET: status, body, subscriber_id validation
+//  2. sendDM() avec RETRY (2 tentatives, 1s entre chaque)
+//  3. LOG quand subscriberId est NULL (cause probable de non-livraison)
+//  4. LOG quand sendDM échoue → identifie la cause exacte
+// Conservé de V110: ZERO-MCRES, SEND DEDUP, ATOMIC CLAIM
 // Conservé de V108/V109:
 //  - responded_at, anti-doublon 45s/90s, pre-send lock 30s, __YIELDED__
 // Conservé tel quel:
@@ -345,16 +343,34 @@ function mcEmpty(): Response {
 }
 
 async function sendDM(subscriberId: string, text: string): Promise<boolean> {
-  try {
-    const apiKey = await getMcKey();
-    if (!apiKey) return false;
-    const r = await fetch('https://api.manychat.com/fb/sending/sendContent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-      body: JSON.stringify({ subscriber_id: parseInt(subscriberId), data: { version: 'v2', content: { messages: [{ type: 'text', text }] } }, message_tag: 'HUMAN_AGENT' })
-    });
-    return r.ok;
-  } catch { return false; }
+  const maxRetries = 2;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const apiKey = await getMcKey();
+      if (!apiKey) { console.error(`[V111] sendDM FAIL: no API key (attempt ${attempt})`); continue; }
+      const subIdNum = parseInt(subscriberId);
+      if (isNaN(subIdNum) || subIdNum <= 0) { console.error(`[V111] sendDM FAIL: invalid subscriber_id="${subscriberId}" → NaN`); return false; }
+      const payload = { subscriber_id: subIdNum, data: { version: 'v2', content: { messages: [{ type: 'text', text: text.substring(0, 1000) }] } }, message_tag: 'HUMAN_AGENT' };
+      console.log(`[V111] sendDM attempt ${attempt}: sub=${subIdNum}, textLen=${text.length}`);
+      const r = await fetch('https://api.manychat.com/fb/sending/sendContent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify(payload)
+      });
+      const bodyText = await r.text();
+      if (r.ok) {
+        console.log(`[V111] sendDM SUCCESS: sub=${subIdNum}, status=${r.status}`);
+        return true;
+      } else {
+        console.error(`[V111] sendDM FAIL: sub=${subIdNum}, status=${r.status}, body=${bodyText.substring(0, 300)}`);
+        if (attempt < maxRetries) { await new Promise(res => setTimeout(res, 1000)); }
+      }
+    } catch (e: any) {
+      console.error(`[V111] sendDM ERROR: attempt ${attempt}, ${e.message}`);
+      if (attempt < maxRetries) { await new Promise(res => setTimeout(res, 1000)); }
+    }
+  }
+  return false;
 }
 
 async function setField(subscriberId: string, text: string): Promise<void> {
@@ -2070,8 +2086,14 @@ export default async function handler(req: Request): Promise<Response> {
         console.log(`[V110] 🛑 SEND DEDUP (distress): autre process a déjà envoyé dans les 10s → SKIP sendDM`);
         return mcEmpty();
       }
-      // V110: ZERO-MCRES — toujours mcEmpty(), jamais mcRes()
-      if (subscriberId) { const sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
+      // V111: ZERO-MCRES + logging — toujours mcEmpty(), jamais mcRes()
+      if (subscriberId) {
+        console.log(`[V111] DISTRESS sendDM: sub=${subscriberId}, responseLen=${response.length}`);
+        const sent = await sendDM(subscriberId, response);
+        if (!sent) { console.error(`[V111] ⚠️ DISTRESS sendDM FAILED → setField backup`); await setField(subscriberId, response); }
+      } else {
+        console.error(`[V111] 🚨 DISTRESS: subscriberId is NULL — cannot send DM! userId=${userId}`);
+      }
       return mcEmpty();
     }
 
@@ -2592,10 +2614,15 @@ export default async function handler(req: Request): Promise<Response> {
       return mcEmpty();
     }
 
-    // V110: ZERO-MCRES — TOUJOURS mcEmpty(). sendDM() est le SEUL chemin d'envoi.
-    // Si sendDM() échoue → setField() comme backup (ManyChat affiche le custom field)
-    // JAMAIS mcRes(response) — ça causait les 3-4x doublons
-    if (subscriberId) { const sent = await sendDM(subscriberId, response); if (!sent) await setField(subscriberId, response); }
+    // V111: ZERO-MCRES + logging — sendDM() est le SEUL chemin d'envoi.
+    if (subscriberId) {
+      console.log(`[V111] NORMAL sendDM: sub=${subscriberId}, responseLen=${response.length}`);
+      const sent = await sendDM(subscriberId, response);
+      if (!sent) { console.error(`[V111] ⚠️ NORMAL sendDM FAILED → setField backup. sub=${subscriberId}`); await setField(subscriberId, response); }
+      else { console.log(`[V111] ✅ DM delivered to sub=${subscriberId}`); }
+    } else {
+      console.error(`[V111] 🚨 subscriberId is NULL — cannot send DM! userId=${userId}`);
+    }
     return mcEmpty();
   } catch (e: any) {
     console.error('[V110] Error:', e.message);
