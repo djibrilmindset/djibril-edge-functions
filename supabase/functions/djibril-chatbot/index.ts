@@ -1,12 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V111 — SENDDM DIAGNOSTIC + RETRY + LOGGING ===
-// Changements vs V110:
-//  1. sendDM() avec LOGGING COMPLET: status, body, subscriber_id validation
-//  2. sendDM() avec RETRY (2 tentatives, 1s entre chaque)
-//  3. LOG quand subscriberId est NULL (cause probable de non-livraison)
-//  4. LOG quand sendDM échoue → identifie la cause exacte
-// Conservé de V110: ZERO-MCRES, SEND DEDUP, ATOMIC CLAIM
+// === V112 — SENDDM DIAGNOSTIC + RETRY + DB DELIVERY TRACKING ===
+// Changements vs V111:
+//  1. delivery_status écrit en DB après chaque sendDM → queryable sans logs
+//  2. sendDM() avec RETRY (2 tentatives) + logging complet (status, body)
+//  3. subscriber_id validation (NaN check)
+// Conservé: ZERO-MCRES, SEND DEDUP, ATOMIC CLAIM
 // Conservé de V108/V109:
 //  - responded_at, anti-doublon 45s/90s, pre-send lock 30s, __YIELDED__
 // Conservé tel quel:
@@ -2086,14 +2085,18 @@ export default async function handler(req: Request): Promise<Response> {
         console.log(`[V110] 🛑 SEND DEDUP (distress): autre process a déjà envoyé dans les 10s → SKIP sendDM`);
         return mcEmpty();
       }
-      // V111: ZERO-MCRES + logging — toujours mcEmpty(), jamais mcRes()
+      // V112: ZERO-MCRES + delivery tracking DB
+      let dlvStatus = 'no_sub';
       if (subscriberId) {
-        console.log(`[V111] DISTRESS sendDM: sub=${subscriberId}, responseLen=${response.length}`);
+        console.log(`[V112] DISTRESS sendDM: sub=${subscriberId}, responseLen=${response.length}`);
         const sent = await sendDM(subscriberId, response);
-        if (!sent) { console.error(`[V111] ⚠️ DISTRESS sendDM FAILED → setField backup`); await setField(subscriberId, response); }
+        dlvStatus = sent ? 'sent' : 'failed';
+        if (!sent) { console.error(`[V112] ⚠️ DISTRESS sendDM FAILED → setField backup`); await setField(subscriberId, response); }
       } else {
-        console.error(`[V111] 🚨 DISTRESS: subscriberId is NULL — cannot send DM! userId=${userId}`);
+        console.error(`[V112] 🚨 DISTRESS: subscriberId is NULL — cannot send DM! userId=${userId}`);
       }
+      // Write delivery status to DB
+      if (claimData?.[0]?.id) await supabase.from('conversation_history').update({ delivery_status: `distress:${dlvStatus}:sub=${subscriberId||'null'}` }).eq('id', claimData[0].id);
       return mcEmpty();
     }
 
@@ -2614,15 +2617,19 @@ export default async function handler(req: Request): Promise<Response> {
       return mcEmpty();
     }
 
-    // V111: ZERO-MCRES + logging — sendDM() est le SEUL chemin d'envoi.
+    // V112: ZERO-MCRES + delivery tracking DB
+    let dlvStatus = 'no_sub';
     if (subscriberId) {
-      console.log(`[V111] NORMAL sendDM: sub=${subscriberId}, responseLen=${response.length}`);
+      console.log(`[V112] NORMAL sendDM: sub=${subscriberId}, responseLen=${response.length}`);
       const sent = await sendDM(subscriberId, response);
-      if (!sent) { console.error(`[V111] ⚠️ NORMAL sendDM FAILED → setField backup. sub=${subscriberId}`); await setField(subscriberId, response); }
-      else { console.log(`[V111] ✅ DM delivered to sub=${subscriberId}`); }
+      dlvStatus = sent ? 'sent' : 'failed';
+      if (!sent) { console.error(`[V112] ⚠️ NORMAL sendDM FAILED → setField backup. sub=${subscriberId}`); await setField(subscriberId, response); }
+      else { console.log(`[V112] ✅ DM delivered to sub=${subscriberId}`); }
     } else {
-      console.error(`[V111] 🚨 subscriberId is NULL — cannot send DM! userId=${userId}`);
+      console.error(`[V112] 🚨 subscriberId is NULL — cannot send DM! userId=${userId}`);
     }
+    // Write delivery status to DB
+    if (claimData?.[0]?.id) await supabase.from('conversation_history').update({ delivery_status: `normal:${dlvStatus}:sub=${subscriberId||'null'}` }).eq('id', claimData[0].id);
     return mcEmpty();
   } catch (e: any) {
     console.error('[V110] Error:', e.message);
