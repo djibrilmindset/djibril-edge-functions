@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V87 — TIMEOUT MISTRAL + ANTI-INJECTION + ANTI-ESQUIVE ÉLARGI + QUALITY GATE ===
+// === V88 — CLEAN URL-SAFE + TRONCATURE ALIGNÉE + DB PURGE CLAUDE + SKIP_ GÉNÉRIQUE ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -810,7 +810,7 @@ function detectPattern(msg: string): string | null {
 async function getCachedResponse(pattern: string, history: any[]): Promise<string | null> {
   try {
     const { data } = await supabase.from('pattern_cache').select('response_template, phase').eq('pattern_key', pattern).single();
-    if (!data || data.response_template === 'SKIP_TO_MISTRAL' || data.response_template === 'SKIP_TO_CLAUDE') return null;
+    if (!data || !data.response_template || data.response_template.startsWith('SKIP_')) return null;
     supabase.from('pattern_cache').update({ hit_count: 1, last_used_at: new Date().toISOString() }).eq('pattern_key', pattern).then(() => {});
     return data.response_template;
   } catch { return null; }
@@ -1005,16 +1005,22 @@ function clean(text: string): string {
   r = r.replace(/[;:]/g, ',');
   // Strip parenthèses, crochets, accolades
   r = r.replace(/[(){}\[\]]/g, '');
+  // V88: PROTÉGER LES URLs avant les strip de ponctuation
+  const _urls: string[] = [];
+  r = r.replace(/https?:\/\/[^\s]+/g, (url) => { _urls.push(url); return `__CLEANURL${_urls.length - 1}__`; });
   // Strip guillemets doubles et chevrons (garder apostrophes)
   r = r.replace(/[""«»"]/g, '');
   // Strip caractères spéciaux bizarres (garder lettres FR, chiffres, virgule, ?, apostrophe, espace, /)
   r = r.replace(/[^\wàâäéèêëïîôùûüÿçœæÀÂÄÉÈÊËÏÎÔÙÛÜŸÇŒÆ\s,?''\-\/\.]/g, '');
   // Strip tirets isolés (garder ceux dans les mots comme peut-être)
   r = r.replace(/\s-\s/g, ', ').replace(/\s-$/g, '').replace(/^-\s/g, '');
+  // V88: RESTAURER LES URLs
+  r = r.replace(/__CLEANURL(\d+)__/g, (_, i) => _urls[parseInt(i)]);
   // Nettoyage espaces multiples après strips
   r = r.replace(/\s{2,}/g, ' ').trim();
-  // V71 TRONCATURE: seuil 120 — un DM c'est court. Protéger les URLs
-  if (r.length > 120) {
+  // V88 TRONCATURE: seuil 250 — Mistral génère max ~130 tokens ≈ 500 chars, mais clean() strip beaucoup
+  // Le prompt gère la longueur cible, ici on protège juste contre les dérapages
+  if (r.length > 250) {
     // Extraire les URLs présentes dans le texte
     const urlMatch = r.match(/https?:\/\/[^\s)}\]]+/g);
     if (urlMatch && urlMatch.length > 0) {
@@ -1034,9 +1040,9 @@ function clean(text: string): string {
         r = bp > 0 ? r.substring(0, urlEnd + bp + 1).trim() : r.substring(0, Math.min(r.length, urlEnd + 50)).trim();
       }
     } else {
-      // V75: troncature intelligente — limite augmentée à 200 chars pour permettre des réponses complètes
-      if (r.length > 200) {
-        const cut = r.substring(0, 200);
+      // V88: troncature intelligente — 300 chars max hors URL
+      if (r.length > 300) {
+        const cut = r.substring(0, 300);
         // Priorité 1: dernier point ou ? (fin de phrase = break naturel)
         const lastDot = cut.lastIndexOf('.');
         const qMark = cut.lastIndexOf('?');
@@ -1142,7 +1148,7 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   const olderBotMsgs = allBotMsgs.slice(0, -10);
   const olderBotBans = olderBotMsgs.length > 0 ? '\n⛔ HISTORIQUE ANCIEN (aussi INTERDIT à redire): ' + olderBotMsgs.map(r => `"${(r || '').substring(0, 50)}"`).join(' | ') : '';
   // DÉTECTION POST-DEFLECT: si le dernier msg bot était un deflect média, le prospect vient de réécrire en texte
-  // V81: élargi les détections post-deflect pour couvrir TOUTES les phrases que Claude génère malgré les interdictions
+  // V81: élargi les détections post-deflect pour couvrir TOUTES les phrases que Mistral génère malgré les interdictions
   const mediaDeflectPhrases = ['bug un peu', 'souci d\'affichage', 'charge pas', 'tel déconne', 'veut pas s\'ouvrir', 'en déplacement', 'co qui rame', 'passe pas sur mon tel', 'appli bug', 'arrive pas à ouvrir', 'vocaux passent pas', 'passe pas de mon côté', 'capté ton vocal', 'capté frérot', 'ça a coupé', 'redis-moi', 'retape ça'];
   const lastBotMsg = (recentBot[recentBot.length - 1] || '').toLowerCase();
   const wasMediaDeflect = mediaDeflectPhrases.some(p => lastBotMsg.includes(p));
@@ -1909,7 +1915,7 @@ export default async function handler(req: Request): Promise<Response> {
     if (!response) {
       const mInfo2 = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
       response = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile, isOutbound, mInfo2);
-      console.log(`[V79] CLAUDE ${response.length}c`);
+      console.log(`[V79] MISTRAL ${response.length}c`);
     }
     if (hasSalamBeenSaid(history) && /^salam/i.test(response)) {
       response = response.replace(/^salam[\s!?.]*(?:aleykoum)?[\s!?.]*(?:fr[eé]rot)?[\s!?.,]*/i, '').trim();
