@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V83 — MISTRAL LARGE 3 + PROMPT ULTRA-CONDENSÉ + AUDIT COMPLET ===
+// === V83.2 — MISTRAL LARGE 3 + FIX DÉTRESSE REGEX + DEPLOY DIRECT ===
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -379,8 +379,8 @@ function detectDistress(msg: string, history: any[]): boolean {
     /tout est noir/i, /envie de (mourir|en finir|disparaitre|disparaître)/i,
     /je (veux|voudrais) (mourir|en finir|disparaitre)/i, /(suicide|suicid|me tuer|me faire du mal)/i,
     /rien ne va|plus envie de rien/i, /plus aucun (sens|espoir|raison)/i,
-    /(veux|voudrais) plus vivre/i, /ça sert (à|a) rien/i, /j.?en peux (vraiment |)plus/i,
-    /je (sers|vaux) à rien/i, /personne (m.?aime|me comprend)/i,
+    /(veux|voudrais) plus vivre/i, /[cç]a sert ([àa]) rien/i, /j.?en peux (vraiment |)plus/i,
+    /je (sers|vaux) [àa] rien/i, /personne (m.?aime|me comprend)/i,
     /dépression|dépressif|déprimé/i, /pensées (noires|sombres)/i,
     /crise.{0,15}(angoisse|panique|anxiété)/i, /j.?ai (envie de|plus la force)/i
   ];
