@@ -1,10 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V113 — INLINE DEPLOY + SAVEPENDING DEDUP + DELIVERY TRACKING ===
-// Changements vs V112:
-//  1. INLINE DEPLOY — plus de GitHub raw URL (élimine cache Deno)
-//  2. savePending() DEDUP — si __PENDING__ existe dans les 30s, skip insert
-//  3. ATOMIC CLAIM → delivery_status écrit sur TOUTES les rows claimed
+// === V114 — FIX SENDDM: REMOVE HUMAN_AGENT TAG (INSTAGRAM INVALID) ===
+// Changements vs V113:
+//  1. REMOVED message_tag 'HUMAN_AGENT' from sendDM() — INVALID on Instagram, caused ALL DMs to fail
+//  2. savePending() DEDUP (V113)
+//  3. ATOMIC CLAIM → delivery_status écrit sur TOUTES les rows claimed (V113)
 //  4. delivery_status, sendDM retry, subscriber_id validation (V112)
 // Conservé: ZERO-MCRES, SEND DEDUP, ATOMIC CLAIM
 // Conservé de V108/V109:
@@ -350,7 +350,8 @@ async function sendDM(subscriberId: string, text: string): Promise<boolean> {
       if (!apiKey) { console.error(`[V111] sendDM FAIL: no API key (attempt ${attempt})`); continue; }
       const subIdNum = parseInt(subscriberId);
       if (isNaN(subIdNum) || subIdNum <= 0) { console.error(`[V111] sendDM FAIL: invalid subscriber_id="${subscriberId}" → NaN`); return false; }
-      const payload = { subscriber_id: subIdNum, data: { version: 'v2', content: { messages: [{ type: 'text', text: text.substring(0, 1000) }] } }, message_tag: 'HUMAN_AGENT' };
+      // V114: REMOVED message_tag 'HUMAN_AGENT' — INVALID on Instagram (FB-only). Caused ALL sendDM to fail.
+      const payload = { subscriber_id: subIdNum, data: { version: 'v2', content: { messages: [{ type: 'text', text: text.substring(0, 1000) }] } } };
       console.log(`[V111] sendDM attempt ${attempt}: sub=${subIdNum}, textLen=${text.length}`);
       const r = await fetch('https://api.manychat.com/fb/sending/sendContent', {
         method: 'POST',
