@@ -1,11 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// === V103 — CLEANUP MISTRAL (chat core 100% Claude, Pixtral isolé) ===
-// Changements vs V102:
-//  1. Chat core: 100% Claude Sonnet 4.6 (plus aucun appel chat à Mistral)
-//  2. Clé Pixtral renommée pour clarté (_pixtralKey / getPixtralKey), usage limité à describeImage
-//  3. Logs / commentaires purgés des références "Mistral" dans le flow chat
-//  4. Zéro code mort lié à l'ancien modèle chat
+// === V104 — FIX BOUCLE FALLBACK + CLEANUP MISTRAL ===
+// Changements vs V103:
+//  1. Seuil similarité anti-repeat relevé 0.25 → 0.4 (trop de rejets légitimes)
+//  2. Fallback keyword: 8 templates variés au lieu d'un seul (anti-boucle)
+//  3. Seuil retry-aussi-repeat relevé 0.4 → 0.5
+//  4. Historique prospect 371758781 purgé (réponses fallback toxiques supprimées)
 // Conservé tel quel:
 //  - buildPrompt V101 (3 règles motrices + OBJECTIF/EXEMPLES par phase + style oral varié)
 //  - Pixtral (images) via api.mistral.ai/v1/chat/completions (SEUL reste Mistral, isolé)
@@ -2418,32 +2418,50 @@ export default async function handler(req: Request): Promise<Response> {
           isRepeat = true;
         }
       }
-      // V84: SIMILARITY CHECK (seuil 0.25)
+      // V104: SIMILARITY CHECK (seuil relevé 0.4 — 0.25 rejetait trop de réponses légitimes)
       if (!isRepeat) {
         for (const lastR of lastResponses) {
-          if (lastR && calculateSimilarity(response, lastR) > 0.25) {
-            console.log(`[V84] 🛑 SIM REPEAT: "${response.substring(0, 40)}" ~ "${lastR.substring(0, 40)}" → REGENERATE`);
+          if (lastR && calculateSimilarity(response, lastR) > 0.4) {
+            console.log(`[V104] SIM REPEAT: "${response.substring(0, 40)}" ~ "${lastR.substring(0, 40)}" → REGENERATE`);
             isRepeat = true;
             break;
           }
         }
       }
-      // V84: Si repeat → RÉGÉNÉRER avec Claude + instruction anti-repeat explicite, PAS un fallback générique
+      // V104: Si repeat → RÉGÉNÉRER avec Claude + instruction anti-repeat explicite
       if (isRepeat) {
-        console.log('[V84] Regenerating with explicit anti-repeat...');
-        const retryHint = `\n\n🚨 TA DERNIÈRE RÉPONSE "${response}" ÉTAIT UN DOUBLON. Génère quelque chose de COMPLÈTEMENT DIFFÉRENT. Rebondis sur un DÉTAIL PRÉCIS du message du prospect. JAMAIS de question générique type "Développe/Raconte/C'est-à-dire/Qu'est-ce qui te bloque". Cite un MOT EXACT de son message et creuse dessus.`;
+        console.log('[V104] Regenerating with explicit anti-repeat...');
+        const retryHint = `\n\n TA DERNIÈRE RÉPONSE "${response}" ÉTAIT UN DOUBLON. Génère quelque chose de COMPLÈTEMENT DIFFÉRENT. Rebondis sur un DÉTAIL PRÉCIS du message du prospect. JAMAIS de question générique type "Développe/Raconte/C'est-à-dire/Qu'est-ce qui te bloque". Cite un MOT EXACT de son message et creuse dessus.`;
         const mInfo3 = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
         const retry = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile, isOutbound, mInfo3, retryHint);
-        // Si le retry est AUSSI un doublon → ultime fallback
-        if (lastResponses.some(lr => lr.toLowerCase().trim() === retry.toLowerCase().trim()) || calculateSimilarity(retry, response) > 0.4) {
+        // Si le retry est AUSSI un doublon → fallback VARIÉ (pas toujours le même template)
+        if (lastResponses.some(lr => lr.toLowerCase().trim() === retry.toLowerCase().trim()) || calculateSimilarity(retry, response) > 0.5) {
           const userWords = msg.toLowerCase().split(/\s+/).filter(w => w.length > 3);
           const pick = userWords[Date.now() % Math.max(userWords.length, 1)] || '';
-          if (pick) {
-            response = `Quand tu dis "${pick}", ça veut dire quoi pour toi concrètement ?`;
-          } else {
-            response = `En vrai, c'est quoi le truc qui te prend le plus la tête là ?`;
-          }
-          console.log('[V86] Retry also repeat → keyword fallback');
+          // V104: FALLBACK VARIÉ — 8 templates au lieu d'un seul
+          const fallbackTemplates = pick ? [
+            `"${pick}" — concrètement ça se passe comment ?`,
+            `T'as dit "${pick}", ça ressemble à quoi dans ta journée ?`,
+            `Le truc "${pick}" là, c'est depuis quand ?`,
+            `Quand tu parles de "${pick}", c'est quoi le vrai blocage ?`,
+            `"${pick}" — en gros t'es où là-dedans aujourd'hui ?`,
+            `Le "${pick}", ça te coûte quoi au quotidien ?`,
+            `Attends, "${pick}" — tu veux dire quoi par là exactement ?`,
+            `"${pick}" — c'est le genre de truc qui te freine ou qui te motive ?`,
+          ] : [
+            `En vrai là, c'est quoi ton plus gros blocage ?`,
+            `Concrètement, c'est quoi qui te prend le plus la tête ?`,
+            `Si tu devais changer un seul truc demain matin, ce serait quoi ?`,
+            `Là maintenant, c'est quoi qui te freine le plus ?`,
+            `Dis-moi un truc, c'est quoi ta situation exacte ?`,
+            `Frérot, si j'te demande ton plus gros problème là, tu me dis quoi ?`,
+          ];
+          // Choisir un template pas encore utilisé récemment
+          const usedFallbacks = lastResponses.filter(Boolean);
+          let chosen = fallbackTemplates.find(t => !usedFallbacks.some(u => calculateSimilarity(t, u) > 0.3));
+          if (!chosen) chosen = fallbackTemplates[Date.now() % fallbackTemplates.length];
+          response = chosen;
+          console.log('[V104] Retry also repeat → varied keyword fallback');
         } else {
           response = retry;
         }
