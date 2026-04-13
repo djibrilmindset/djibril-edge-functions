@@ -16,7 +16,7 @@ const CALENDLY_LINK = 'https://calendly.com/djibrilsylearn/45min';
 const MODEL = 'mistral-large-2512';
 const PIXTRAL_MODEL = 'pixtral-large-latest';
 const WHISPER_MODEL = 'gpt-4o-mini-transcribe'; // anti-hallucination natif
-const MAX_TOKENS = 80;
+const MAX_TOKENS = 130;
 const DEBOUNCE_MS = 20000;
 
 let _mistralKey: string | null = null;
@@ -1211,24 +1211,24 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
   let maxChars = 100; // V75: assez pour des réponses complètes. Le system prompt gère la longueur
   switch(phase) {
     case 'ACCUEIL':
-      phaseInstr = `Premier msg. ${salamDone ? '' : 'Salam, '}1 question courte`;
-      maxChars = 60;
+      phaseInstr = `Premier msg. ${salamDone ? '' : 'COMMENCE PAR "Salam aleykoum" + '}demande-lui ce qui l'amène, en quoi il galère, ou ce qu'il cherche`;
+      maxChars = 100;
       break;
     case 'EXPLORER_OUTBOUND':
       phaseInstr = `OUTBOUND: T'as DM en premier. MIROIR ses mots + rebondis en 5 mots. SILENCE OK si il développe${profileBlock ? ' ' + profileBlock.trim() : ''}`;
       maxChars = 80;
       break;
     case 'EXPLORER':
-      phaseInstr = `ÉCOUTE PURE. Reprends SES mots (miroir) + 1 question courte. Suis SON rythme. Si il parle beaucoup → "Grave" ou "Ah ouais" (silence stratégique)`;
-      maxChars = 60;
+      phaseInstr = `ÉCOUTE PURE. Reprends SES mots (miroir) + rebondis sur un DÉTAIL précis de ce qu'il a dit. Suis SON rythme. Si il parle beaucoup → "Grave" ou "Ah ouais" (silence stratégique)`;
+      maxChars = 120;
       break;
     case 'CREUSER':
-      phaseInstr = `🔻 PAIN FUNNEL: Va UN CRAN plus profond que ce qu'il vient de dire. Pas large, PROFOND. LABEL son émotion si tu la sens ("ça te pèse", "t'en peux plus"). Exemple: il dit "j'avance pas" → "Ça fait combien de temps ?" puis "Et tu le vis comment ?"${metierPainBlock}`;
-      maxChars = 80;
+      phaseInstr = `🔻 PAIN FUNNEL: Va UN CRAN plus profond que ce qu'il vient de dire. Pas large, PROFOND. LABEL son émotion si tu la sens ("ça te pèse", "t'en peux plus"). Rebondis sur un ÉLÉMENT PRÉCIS de ce qu'il a dit, pas une question générique. Exemple: il dit "j'avance pas dans le drop" → "Le drop c'est chaud, t'en étais où quand t'as lâché ?"${metierPainBlock}`;
+      maxChars = 130;
       break;
     case 'RÉVÉLER':
-      phaseInstr = `🏷️ LABEL + GAP: Nomme ce qu'il ressent ("on dirait que...") puis REFLÈTE l'écart: "Là t'en es à [sa situation] et tu veux [son objectif]". C'est LUI qui conclut, pas toi${metierPainBlock}`;
-      maxChars = 80;
+      phaseInstr = `🏷️ LABEL + GAP: Nomme ce qu'il ressent ("on dirait que...") puis REFLÈTE l'écart: "Là t'en es à [sa situation] et tu veux [son objectif]". Rebondis sur ses mots EXACTS. C'est LUI qui conclut, pas toi${metierPainBlock}`;
+      maxChars = 130;
       break;
     case 'PROPOSER_VALEUR':
       phaseInstr = `📌 PIVOT: Relie à ce qu'il a dit (reprends SES mots) PUIS le lien. "Tiens regarde ça, c'est lié à ce que tu disais: ${LINK_VALEUR}"`;
@@ -1239,8 +1239,8 @@ function buildPrompt(history: any[], phaseResult: PhaseResult, memoryBlock: stri
       maxChars = 100;
       break;
     case 'QUALIFIER':
-      phaseInstr = `🎯 QUALIFICATION DOULEUR: Évalue l'intensité de sa douleur, PAS son budget. "Ça fait combien de temps ?", "T'as déjà essayé des trucs ?", "Et ça a donné quoi ?" + GAP: fais-lui VOIR l'écart entre où il est et où il veut être${metierPainBlock}`;
-      maxChars = 80;
+      phaseInstr = `🎯 QUALIFICATION DOULEUR: Évalue l'intensité de sa douleur, PAS son budget. Rebondis sur CE QU'IL A DIT — cite ses mots. "Ça fait combien de temps ?", "T'as déjà essayé des trucs ?", "Et ça a donné quoi ?" + GAP: fais-lui VOIR l'écart entre où il est et où il veut être${metierPainBlock}`;
+      maxChars = 130;
       break;
     case 'ENVOYER_LANDING':
       phaseInstr = `"Tiens: ${LINK_LANDING}" + 3 mots`;
@@ -1274,19 +1274,19 @@ ${memoryBlock}${profileBlock}${alreadyKnownBlock}${userSummary}${funnelStatus}${
 ÉNERGIE: Tu réponds sur ton tel entre deux trucs. Texto à un pote.
 
 RÈGLES ABSOLUES:
-1. RÉPONDS à ce qu'il dit. Question → réponse directe 5 mots. "ok/c bon" → rebondis ou laisse. JAMAIS à côté.
-2. COURT: 1 phrase 5-15 mots par défaut. Vraie question (prix/programme) → 2-3 phrases max complètes.
-3. ZÉRO LEÇON: pas de conseil/exercice/psychologie/métaphore. ÉCOUTE + ORIENTE vers liens. La valeur = liens.
-4. MIRRORING: reprends SES mots exacts. "j'arrive pas à avancer" → "T'arrives pas à avancer ?"
-5. HUMAIN: bot/IA accusation → "frère c'est moi" détendu 5 mots. Vocaux: t'écoutes (transcription entre crochets), t'en envoies PAS. JAMAIS dire "vocal/audio/message vocal" ni mentionner bug technique.
-6. FRUSTRATION: il se plaint → "Excuse frérot" + réponds à sa VRAIE question d'avant. Priorité absolue.
-7. INAPPROPRIÉ: porno/drogue/streaming illégal/violence → "chacun son truc, moi j'parle business" et SWITCH direct. JAMAIS poser de question dessus.
-8. BARBER: si c'est SON métier → creuse sa douleur dedans. Sinon → JAMAIS mentionner.
-9. OUVERTURES VARIÉES: jamais "Merci de partager/Intéressant/Courageux". Varie: "Ah ouais/Clairement/J'capte/Mmh/Ok". "Yo" max 1/5 msgs.
-10. "DÉLIRE"/"TON DÉLIRE": UNIQUEMENT quand il parle d'un PROJET/PASSION. JAMAIS sur un simple salut ou une question sérieuse.
-11. ANTI-ESQUIVE: Si il demande "tu proposes quoi/c'est quoi/tu fais quoi" → RÉPONDS DIRECT: "J'accompagne des gens à lancer un truc smart qui rapporte" ou similaire + lien valeur si dispo. JAMAIS esquiver avec une contre-question.
-12. ZÉRO RÉPÉTITION SÉMANTIQUE: Relis le bloc ⛔ DÉJÀ DIT. Si tu as déjà dit la MÊME IDÉE en d'autres mots → DIS AUTRE CHOSE. Exemple: si t'as dit "trouver un truc qui te plaît et qui paie" → INTERDIT de dire "l'équilibre entre kiffer et gagner". Change COMPLÈTEMENT d'angle.
-13. ZÉRO "Développe/Raconte/Dis-moi" en boucle. Si t'as déjà dit un truc court comme "Développe" ou "Raconte" → la prochaine fois rebondis sur un DÉTAIL de ce qu'il a dit.
+1. RÉPONDS à ce qu'il dit. Question → réponse directe. "ok/c bon" → rebondis ou laisse. JAMAIS à côté.
+2. LONGUEUR: 1-2 phrases (15-30 mots). JAMAIS une phrase de 3 mots type "Développe" ou "Raconte" — c'est robotique. Montre que t'as LU ce qu'il a dit en rebondissant sur un DÉTAIL PRÉCIS. Vraie question (prix/programme) → 2-3 phrases complètes.
+3. HUMAIN AVANT TOUT: T'es un gars qui parle à un autre gars. RÉAGIS à ce qu'il dit comme un HUMAIN — si il te dit un truc chaud, dis "ah ouais c'est chaud ça" PUIS rebondis. Si il te pose une question, RÉPONDS PUIS pose la tienne. JAMAIS ignorer ce qu'il vient de dire.
+4. ZÉRO LEÇON: pas de conseil/exercice/psychologie/métaphore. ÉCOUTE + ORIENTE vers liens. La valeur = liens.
+5. MIRRORING: reprends SES mots exacts dans ta réponse. "j'arrive pas à avancer" → "Tu dis que t'arrives pas à avancer, c'est quoi concrètement qui bloque ?"
+6. HUMAIN: bot/IA accusation → "frère c'est moi" détendu. Vocaux: t'écoutes (transcription entre crochets), t'en envoies PAS. JAMAIS dire "vocal/audio/message vocal" ni mentionner bug technique.
+7. FRUSTRATION: il se plaint → "Excuse frérot" + réponds à sa VRAIE question d'avant. Priorité absolue.
+8. INAPPROPRIÉ: porno/drogue/streaming illégal/violence → "chacun son truc, moi j'parle business" et SWITCH direct. JAMAIS poser de question dessus.
+9. BARBER: si c'est SON métier → creuse sa douleur dedans. Sinon → JAMAIS mentionner.
+10. OUVERTURES VARIÉES: jamais "Merci de partager/Intéressant/Courageux". Varie: "Ah ouais/Clairement/J'capte/Mmh/Ok". "Yo" max 1/5 msgs.
+11. "DÉLIRE"/"TON DÉLIRE": UNIQUEMENT quand il parle d'un PROJET/PASSION. JAMAIS sur un simple salut ou une question sérieuse.
+12. ANTI-ESQUIVE: Si il demande "tu proposes quoi/c'est quoi/tu fais quoi" → RÉPONDS DIRECT: "J'accompagne des gens à lancer un business smart" + lien valeur si dispo. JAMAIS esquiver avec une contre-question.
+13. ZÉRO RÉPÉTITION: Relis le bloc ⛔ DÉJÀ DIT. JAMAIS redire la même idée, même avec des mots différents. JAMAIS répéter "Développe/Raconte/C'est-à-dire/Qu'est-ce qui te bloque" — cite un DÉTAIL de son message à la place.
 
 SKILLS (activation auto par phase):
 - LABELING: "T'as l'air bloqué", "Ça te saoule" → 3-5 mots oral. JAMAIS "je comprends que tu ressentes". [CREUSER/RÉVÉLER/QUALIFIER]
@@ -1303,7 +1303,7 @@ ${funnel.funnelStep === 'NEED_VALEUR' ? `LIEN: ${LINK_VALEUR}` : funnel.funnelSt
 ${pending.hasPending ? `"${pending.question.substring(0, 40)}" déjà posé. ${pending.turnsWaiting >= 2 ? 'Abandonne.' : 'Repose pas.'}` : ''}
 ${techBlock}${conceptBans}
 
-MAX ${maxChars} CHARS. UNE PHRASE. Court > long.
+MAX ${maxChars} CHARS. 1-2 phrases naturelles. Montre que t'as lu ce qu'il a dit.
 ${phase} | Trust ${trust}/10 | #${n+1} | ${funnel.funnelStep} | ${qual}${postDeflectBlock}
 ${phaseInstr}${botBans}${olderBotBans}`;
 }
@@ -1386,7 +1386,7 @@ function buildMessages(history: any[], currentMsg: string, mem: ProspectMemory, 
   return cleaned;
 }
 
-async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile, isOutbound: boolean = false, mediaInfo?: { type: 'image' | 'audio' | null; processedText: string | null; context: string | null }): Promise<string> {
+async function generateWithRetry(userId: string, platform: string, msg: string, history: any[], isDistressOrStuck: boolean, mem: ProspectMemory, profile?: ProspectProfile, isOutbound: boolean = false, mediaInfo?: { type: 'image' | 'audio' | null; processedText: string | null; context: string | null }, extraHint?: string): Promise<string> {
   // V82: MISTRAL LARGE via Mistral API
   const key = await getMistralKey();
   if (!key) return 'Souci technique, réessaie dans 2 min';
@@ -1394,6 +1394,7 @@ async function generateWithRetry(userId: string, platform: string, msg: string, 
   const phaseResult = getPhase(history, msg, isDistress, mem, isOutbound);
   const memoryBlock = formatMemoryBlock(mem);
   let sys = buildPrompt(history, phaseResult, memoryBlock, profile);
+  if (extraHint) sys += extraHint;
   // Si spirale détectée, injecter un RESET dans le prompt
   const recentResponses = history.map((h: any) => h.bot_response || '').filter(Boolean);
   const isStuck = recentResponses.length >= 3 && recentResponses.slice(-3).some((r, i, arr) => i > 0 && calculateSimilarity(r, arr[0]) > 0.3);
@@ -1907,7 +1908,7 @@ export default async function handler(req: Request): Promise<Response> {
     if (qual === 'low_budget' || qual === 'disqualified_budget') {
       if (/https?:\/\//i.test(response)) { response = response.replace(/https?:\/\/[^\s]+/gi, '').trim(); console.log('[V65] STRIPPED all links (low/disq budget)'); }
     }
-    // V77: ANTI-RÉPÉTITION FINALE RENFORCÉE — relit les 5 dernières réponses, seuil plus bas (0.3)
+    // V84: ANTI-RÉPÉTITION FINALE RENFORCÉE — relit les 10 dernières réponses + short repeat check
     const { data: lastBotCheck } = await supabase.from('conversation_history')
       .select('bot_response')
       .eq('user_id', userId)
@@ -1915,25 +1916,48 @@ export default async function handler(req: Request): Promise<Response> {
       .neq('bot_response', '__ADMIN_TAKEOVER__')
       .neq('bot_response', '__OUTBOUND__')
       .order('created_at', { ascending: false })
-      .limit(5);
+      .limit(10);
     if (lastBotCheck && lastBotCheck.length > 0) {
       const lastResponses = lastBotCheck.map(r => r.bot_response || '');
-      // V77: Check EXACT match first (même texte = doublon évident)
-      if (lastResponses.includes(response)) {
-        console.log(`[V77] 🛑 ANTI-RÉPÉTITION: EXACT MATCH détecté → FALLBACK`);
-        const freshFallbacks = ["Du coup t'en es où", "Genre comment ça", "Et du coup", "Ah ouais ?", "C'est-à-dire ?", "Mmh vas-y", "Clairement", "T'en es où du coup", "Développe", "En vrai ?"];
-        const availFresh = freshFallbacks.filter(f => !lastResponses.some(lr => calculateSimilarity(f, lr) > 0.15));
-        response = (availFresh.length ? availFresh : freshFallbacks)[Date.now() % (availFresh.length || freshFallbacks.length)];
-      } else {
-        // V77: Check similarity (seuil abaissé de 0.4 à 0.3)
+      let isRepeat = false;
+      // V84: EXACT MATCH
+      if (lastResponses.some(lr => lr.toLowerCase().trim() === response.toLowerCase().trim())) {
+        console.log(`[V84] 🛑 EXACT MATCH: "${response.substring(0, 50)}" → REGENERATE`);
+        isRepeat = true;
+      }
+      // V84: SHORT REPEAT (core word match)
+      if (!isRepeat && response.split(/\s+/).length <= 6) {
+        const stripFillers = (s: string) => s.toLowerCase().replace(/\b(frérot|frère|frero|un peu|moi|ça|là|ok|ah|ouais|ouai|genre|en vrai|du coup|bah|vas-y|wsh|tiens|bon|hein|quoi|nan)\b/gi, '').trim().split(/\s+/)[0] || '';
+        const core = stripFillers(response);
+        if (core.length > 3 && lastResponses.some(lr => stripFillers(lr) === core)) {
+          console.log(`[V84] 🛑 SHORT REPEAT: core="${core}" → REGENERATE`);
+          isRepeat = true;
+        }
+      }
+      // V84: SIMILARITY CHECK (seuil 0.25)
+      if (!isRepeat) {
         for (const lastR of lastResponses) {
-          if (lastR && calculateSimilarity(response, lastR) > 0.3) {
-            console.log(`[V77] 🛑 ANTI-RÉPÉTITION FINALE: "${response.substring(0, 40)}" trop similaire à "${lastR.substring(0, 40)}" (sim>${calculateSimilarity(response, lastR).toFixed(2)}) → FALLBACK`);
-            const freshFallbacks = ["Du coup t'en es où", "Genre comment ça", "Et du coup", "Ah ouais ?", "C'est-à-dire ?", "Mmh vas-y", "Clairement", "T'en es où du coup", "Développe", "En vrai ?"];
-            const availFresh = freshFallbacks.filter(f => !lastResponses.some(lr => calculateSimilarity(f, lr) > 0.15));
-            response = (availFresh.length ? availFresh : freshFallbacks)[Date.now() % (availFresh.length || freshFallbacks.length)];
+          if (lastR && calculateSimilarity(response, lastR) > 0.25) {
+            console.log(`[V84] 🛑 SIM REPEAT: "${response.substring(0, 40)}" ~ "${lastR.substring(0, 40)}" → REGENERATE`);
+            isRepeat = true;
             break;
           }
+        }
+      }
+      // V84: Si repeat → RÉGÉNÉRER avec Mistral + instruction anti-repeat explicite, PAS un fallback générique
+      if (isRepeat) {
+        console.log('[V84] Regenerating with explicit anti-repeat...');
+        const retryHint = `\n\n🚨 TA DERNIÈRE RÉPONSE "${response}" ÉTAIT UN DOUBLON. Génère quelque chose de COMPLÈTEMENT DIFFÉRENT. Rebondis sur un DÉTAIL PRÉCIS du message du prospect. JAMAIS de question générique type "Développe/Raconte/C'est-à-dire/Qu'est-ce qui te bloque". Cite un MOT EXACT de son message et creuse dessus.`;
+        const mInfo3 = { type: media.type, processedText: mediaProcessedText, context: mediaContext };
+        const retry = await generateWithRetry(userId, platform, msg, history, isStuck, mem, profile, isOutbound, mInfo3, retryHint);
+        // Si le retry est AUSSI un doublon → ultime fallback
+        if (lastResponses.some(lr => lr.toLowerCase().trim() === retry.toLowerCase().trim()) || calculateSimilarity(retry, response) > 0.4) {
+          const userWords = msg.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+          const pick = userWords[Date.now() % Math.max(userWords.length, 1)] || 'ça';
+          response = `"${pick}" — développe un peu ce point`;
+          console.log('[V84] Retry also repeat → word-pick fallback');
+        } else {
+          response = retry;
         }
       }
     }
