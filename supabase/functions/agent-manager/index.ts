@@ -5,12 +5,20 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const supabase = createClient(
-  'https://nbnbsljqtolzzuqnkyae.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU4NzE1OSwiZXhwIjoyMDU4MTYzMTU5fQ.FM0YE-gMCAqjumMJqBBlfXtQgaERPJwqfbIzKHBV1YI'
-);
 
-const MISTRAL_KEY = 'z9Ikvjdr0f65Fq5axFheKwdCOiyUJXti';
+// ── SECRETS (09/10) : rien en dur. Les valeurs vivaient en clair ici (JWT service_role
+// du projet + clé Mistral) — dossier ~/agence-ia/state/SECU-0910/DOSSIER.md.
+// Elles sont lues dans l'environnement Deno ; sans elles la fonction refuse de
+// démarrer (fail-closed) au lieu de tourner avec un secret exposé.
+const SUPABASE_URL = Deno.env.get('AGENT_MANAGER_SUPABASE_URL') ?? '';
+const SUPABASE_SERVICE_KEY = Deno.env.get('AGENT_MANAGER_SUPABASE_SERVICE_KEY') ?? '';
+const MISTRAL_KEY = Deno.env.get('AGENT_MANAGER_MISTRAL_KEY') ?? '';
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  throw new Error('[AGENT-MANAGER] AGENT_MANAGER_SUPABASE_URL / _SERVICE_KEY manquants (fail-closed)');
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 interface AuditResult {
   total_conversations: number;
@@ -203,9 +211,9 @@ async function calculateQualityScore(hours: number = 2): Promise<{score: number;
     if (/j'|t'|c'|y'|l'/.test(conv.bot_response)) { thisScore++; details.natural_tone++; }
     // Utilise le miroir (reprend les mots du user)
     if (conv.user_message) {
-      const userWords = conv.user_message.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      const userWords = conv.user_message.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3);
       const botLow = conv.bot_response.toLowerCase();
-      if (userWords.some(w => botLow.includes(w))) { thisScore++; details.uses_mirror++; }
+      if (userWords.some((w: string) => botLow.includes(w))) { thisScore++; details.uses_mirror++; }
     }
     // Répond aux questions
     if (conv.user_message && /\?/.test(conv.user_message)) {
