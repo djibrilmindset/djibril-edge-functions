@@ -16,7 +16,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 //  - GPT-4o-mini-transcribe (audio)
 //  - Toute la logique funnel / qual / détresse / anti-répétition / V104 fallback varié
 const SUPABASE_URL = "https://nbnbsljqtolzzuqnkyae.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibmJzbGpxdG9senp1cW5reWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzODk2MDYsImV4cCI6MjA4Mzk2NTYwNn0.0Io_TLbntyxYeUUcv_krbcl4txHp6wSwdMy_BzORmV4";
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+if (!SUPABASE_ANON_KEY) {
+  throw new Error('[DJIBRIL-CHATBOT] SUPABASE_ANON_KEY manquante (fail-closed)');
+}
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: false },
   global: { headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
@@ -61,7 +64,7 @@ async function getMistralKey(): Promise<string | null> {
     const { data } = await supabase.rpc('get_mistral_api_key');
     if (data) { _mistralKey = data; _keysFetchedAt = Date.now(); return _mistralKey; }
   } catch {}
-  _mistralKey = 'z9Ikvjdr0f65Fq5axFheKwdCOiyUJXti';
+  _mistralKey = Deno.env.get('MISTRAL_API_KEY') ?? null;
   _keysFetchedAt = Date.now();
   return _mistralKey;
 }
